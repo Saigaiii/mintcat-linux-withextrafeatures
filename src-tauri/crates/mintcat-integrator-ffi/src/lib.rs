@@ -413,8 +413,21 @@ fn check_steam_game(exe_name: String) -> bool {
     }
     #[cfg(not(windows))]
     {
-        let _ = exe_name;
-        false
+        // Match against the full command line so games running under
+        // Proton/Wine are found too. The frontend passes names like
+        // "FSD.exe" while the real Proton process is
+        // ".../FSD-Win64-Shipping.exe", so also try the stem ("FSD").
+        let stem = exe_name
+            .strip_suffix(".exe")
+            .or_else(|| exe_name.strip_suffix(".EXE"))
+            .unwrap_or(&exe_name);
+        [exe_name.as_str(), stem].iter().any(|pattern| {
+            std::process::Command::new("pgrep")
+                .args(["-f", pattern])
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -430,8 +443,20 @@ fn launch_steam_game(steam_app_id: u32) -> Result<bool> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = steam_app_id;
-        Ok(false)
+        let url = format!("steam://run/{steam_app_id}");
+        // xdg-open delegates to the steam:// handler registered by Steam
+        // (native or Flatpak install).
+        match std::process::Command::new("xdg-open").arg(&url).status() {
+            Ok(status) if status.success() => Ok(true),
+            _ => {
+                // Fallback: talk to a running Steam client directly.
+                let status = std::process::Command::new("steam")
+                    .arg(&url)
+                    .status()
+                    .context("failed to launch Steam game (need xdg-utils or Steam)")?;
+                Ok(status.success())
+            }
+        }
     }
 }
 

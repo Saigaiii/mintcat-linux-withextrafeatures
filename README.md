@@ -32,17 +32,47 @@ https://ant-design.antgroup.com/index-cn
 https://docs.mod.io/restapiref/#getting-started
 
 
-# Build & Dev
+# Build & Dev (Linux)
+
+MintCat targets Windows upstream, but runs on Linux (game via Steam + Proton).
+Auto-detection expects DRG installed in Steam (app ID `548430`).
+
+## System dependencies (Arch / CachyOS)
+
+```bash
+sudo pacman -Syu base-devel curl wget file openssl webkit2gtk-4.1 gtk3 libsoup3 librsvg libappindicator-gtk3 pnpm nodejs
+```
+
+## Dev run
 
 ```
-pnpm install 
-pnpm tauri dev
+pnpm install
+pnpm approve-builds esbuild   # pnpm 11+ blocks esbuild postinstall scripts otherwise
+pnpm package:integrator-runtime:dev  # build Linux backend runtime (.so), required for game detection/install
+WEBKIT_DISABLE_DMABUF_RENDERER=1 pnpm tauri dev
 ```
 
-# Publish
+Notes:
+- The first `tauri dev` compiles Rust (~5 min); later starts are incremental.
+- If the window is black/empty on Wayland, run with `GDK_BACKEND=x11`.
+- After changing Rust code in `src-tauri/crates/`, re-run `pnpm package:integrator-runtime:dev` before restarting dev.
+- In Select Game dialog, the ⌖ (Auto Find) button fills the `FSD-WindowsNoEditor.pak` path via Steam library detection.
+
+## Release build (AppImage)
+
+```bash
+pnpm package:integrator-runtime  # release .so into src-tauri/assets/plugins/
+pnpm tauri build --config src-tauri/tauri.linux.conf.json
+# -> src-tauri/target/release/bundle/appimage/mintcat_0.6.0_amd64.AppImage
+```
+
+The AppImage needs `webkit2gtk-4.1` on the host system. The updater only serves
+`windows-x86_64` (`latest.json`), so on Linux update by rebuilding.
+
+# Publish (Windows, upstream flow)
 
 ```shell
-./release.sh
+./scripts/build-release.sh  # cross-compile with cargo-xwin, needs signing key (see script)
 ```
 
 
@@ -50,11 +80,14 @@ pnpm tauri dev
 
 ## Config Path
 ```
-Windows: 
+Windows:
 C:\Users\Alice\AppData\Roaming\com.mint.cat
 
 macOS:
 ~/Library/Application Support/com.mint.cat
+
+Linux:
+~/.config/com.mint.cat
 ```
 
 ## Log Path

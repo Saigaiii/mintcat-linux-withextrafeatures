@@ -39,6 +39,9 @@
     "createUpdaterArtifacts": true
   },
   "plugins": {
+    "fs": {
+      "requireLiteralLeadingDot": false
+    },
     "updater": {
       "windows": {
         "installMode": "basicUi"

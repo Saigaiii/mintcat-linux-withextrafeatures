@@ -253,7 +253,7 @@ export async function ensureInternalAssets(
         : { version: '0', path: '', valid: true };
     const secondActive = await readInternalAssetActive(secondManifestKey, game, channel, secondAssetName);
 
-    const ue4ssZipPath = ue4ssActive.path;
+    let ue4ssZipPath = ue4ssActive.path;
     let secondZipPath = secondActive.path;
 
     const ue4sslVersionForCheck = ue4ssActive.valid ? ue4ssActive.version : '0';
@@ -297,6 +297,7 @@ export async function ensureInternalAssets(
             throw new Error(t('mod.missingVersionOrMd5', { name: 'UE4SSL' }));
         }
         const destPath = await internalAssetPath('ue4ssl', game, channel, r.latestVersion, ASSET_UE4SSL);
+        ue4ssZipPath = destPath;
         downloadQueue.push({ result: r, appType: 'ue4ssl', destPath, manifestKey: 'ue4ssl' });
     }
 

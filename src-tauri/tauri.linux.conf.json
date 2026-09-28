@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "identifier": "com.mint.cat",
+  "bundle": {
+    "targets": ["appimage"],
+    "icon": ["icons/icon.png"],
+    "resources": {
+      "assets/plugins/libmintcat_backend_runtime.so": "plugins/libmintcat_backend_runtime.so"
+    }
+  }
+}

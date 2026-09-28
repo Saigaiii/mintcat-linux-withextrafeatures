@@ -22,30 +22,26 @@ members = [
 name = "mintcat_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-[build]
-targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
-target_arch = "x86_64"
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 
 [dependencies]
-tauri = { version = "2.8.4", features = ["devtools", "protocol-asset"] }
-tauri-plugin-fs = "2.2.1"
-tauri-plugin-shell = "2.2.1"
-tauri-plugin-os = "2.2.1"
-tauri-plugin-log = "2.3.1"
-tauri-plugin-dialog = "2.2.1"
-tauri-plugin-process = "2.2.1"
-tauri-plugin-opener = "2.2.6"
-tauri-plugin-updater = "2.7.0"
-tauri-plugin-clipboard-manager = "2"
-tauri-plugin-store = "2"
-tauri-plugin-sql = { version = "2.3.0",features = ["sqlite"] }
+tauri = { version = "2.12", features = ["devtools", "protocol-asset"] }
+tauri-plugin-fs = "2.6"
+tauri-plugin-shell = "2.4"
+tauri-plugin-os = "2.4"
+tauri-plugin-log = "2.10"
+tauri-plugin-dialog = "2.8"
+tauri-plugin-process = "2.4"
+tauri-plugin-opener = "2.6"
+tauri-plugin-updater = "2.13"
+tauri-plugin-clipboard-manager = "2.4"
+tauri-plugin-store = "2.5"
+tauri-plugin-sql = { version = "2.5",features = ["sqlite"] }
 tauri-plugin-sentry = "0.4"
 tauri-plugin-task-queue = { git = "https://github.com/iriscats/tauri-plugin-task-queue" }
-tauri-plugin-deep-link = "2"
+tauri-plugin-deep-link = "2.4"
 tauri-plugin-single-instance = "2"
 
 anyhow = "1"
