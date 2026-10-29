@@ -16,6 +16,7 @@ import type { CompleteModData } from "@/storage/dao/ModDAO";
 import type { ModInfo } from "@/apis/modio/ModInfo";
 import { taskQueueAPI, TaskPriority } from "tauri-plugin-task-queue";
 import { asyncPoolAll } from "@/utils/AsyncPool";
+import { activeProfileModIds } from "@/services/LocalModRelocation";
 
 /**
  * ModUpdateService 服务层
@@ -864,16 +865,22 @@ export class ModUpdateService {
 
         const modsApi = await StorageAPI.getMods();
         const updatePromises: Promise<void>[] = [];
+        // Only report mods that are in the list being shown: records of mods deleted from the
+        // list (or only in other profiles) stay in the database and are checked here too.
+        const inList = await activeProfileModIds();
 
         for (const modItem of localMods) {
             const cachePath = modItem.download?.cachePath || "";
+            const shown = !inList || inList.has(modItem.modId!);
             
             // 使用并行检查文件是否存在
             updatePromises.push((async () => {
                 const fileExists = await exists(cachePath);
                 const currentNotFound = modItem.status?.isLocalNotFound ?? false;
                 // Log each missing file once per session, and when it comes back
-                if (!fileExists && !reportedMissingModIds.has(modItem.modId!)) {
+                if (!shown) {
+                    // not in the current list: keep its status up to date, but don't report it
+                } else if (!fileExists && !reportedMissingModIds.has(modItem.modId!)) {
                     reportedMissingModIds.add(modItem.modId!);
                     missingFound.push(modItem);
                 } else if (fileExists && reportedMissingModIds.has(modItem.modId!)) {

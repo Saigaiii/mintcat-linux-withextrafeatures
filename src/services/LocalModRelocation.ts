@@ -30,6 +30,24 @@ function joinPath(dir: string, name: string): string {
     return dir.endsWith(sep) ? dir + name : dir + sep + name;
 }
 
+/**
+ * Mod ids in the active profile, i.e. the mods shown in the list. Deleting a mod from the
+ * list only removes it from the profile; its record stays in the database, so checks over
+ * all records must not report those. Returns null when the profile can't be read.
+ */
+export async function activeProfileModIds(): Promise<Set<number> | null> {
+    try {
+        const profiles = await StorageAPI.getProfiles();
+        const active = await profiles.getActiveProfile();
+        if (!active?.id) return null;
+        const mods = await profiles.getProfileMods(active.id);
+        return new Set(mods.map(m => m.modId!).filter(id => id != null));
+    } catch (e) {
+        console.warn('[LocalModRelocation] could not read the active profile', e);
+        return null;
+    }
+}
+
 export function localModPath(mod: CompleteModData): string {
     return mod.download?.cachePath || mod.url || "";
 }
@@ -83,9 +101,11 @@ export async function findMovedSiblings(oldDir: string, newDir: string, excludeM
     if (!oldDir || !newDir || oldDir === newDir) return [];
     const modsApi = await StorageAPI.getMods();
     const all = await modsApi.getAllCompleteModData();
+    const inList = await activeProfileModIds();
     const found: { mod: CompleteModData; newPath: string }[] = [];
     for (const mod of all) {
         if (mod.sourceType !== ModSourceType.Local || mod.modId == null || mod.modId === excludeModId) continue;
+        if (inList && !inList.has(mod.modId)) continue;
         const current = localModPath(mod);
         if (!current || parentDir(current) !== oldDir) continue;
         if (await exists(current)) continue;
