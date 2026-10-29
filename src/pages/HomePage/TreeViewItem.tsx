@@ -133,6 +133,8 @@ interface WarningState {
     hasConflict: boolean;
 }
 const warningStateCache = new Map<number, WarningState>();
+/** The row data each cached state was computed from (see the effect in ModTreeViewWarring) */
+const warningBasisCache = new Map<number, string>();
 
 export function getCachedWarningState(modId: number, fallback: WarningState): WarningState {
     return warningStateCache.get(modId) ?? fallback;
@@ -145,8 +147,10 @@ export function setCachedWarningState(modId: number, state: WarningState): void 
 export function clearCachedWarningState(modId?: number): void {
     if (modId !== undefined) {
         warningStateCache.delete(modId);
+        warningBasisCache.delete(modId);
     } else {
         warningStateCache.clear();
+        warningBasisCache.clear();
     }
 }
 
@@ -708,8 +712,13 @@ function ModTreeViewWarring({nodeData}) {
             isOnlineUnavailable: checkOnlineUnavailable(),
             hasConflict: checkConflict(),
         };
-        if (!warningStateCache.has(nodeData.modId)) {
+        // The cache covers remounts that carry old row data (e.g. after scrolling); when the
+        // row data itself changed since the cached state was made, the fresh data wins.
+        const basis = JSON.stringify([nodeData.downloadProgress, nodeData.lastUpdateDate, nodeData.onlineUpdateDate,
+            nodeData.onlineAvailable, nodeData.localNoFound]);
+        if (!warningStateCache.has(nodeData.modId) || warningBasisCache.get(nodeData.modId) !== basis) {
             setCachedWarningState(nodeData.modId, fallback);
+            warningBasisCache.set(nodeData.modId, basis);
         }
         const cached = getCachedWarningState(nodeData.modId, fallback);
         setWarningState(cached);
