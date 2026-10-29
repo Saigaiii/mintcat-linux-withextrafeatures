@@ -519,5 +519,16 @@
     "nexusmods.nxmDownloadStarted": "Nexus Mods download completed.",
     "nexusmods.webviewOpened": "Opened the Nexus Mods download window. Click the download button in that window.",
     "nexusmods.webviewAutoOpened": "Opened the Nexus Mods download window and is fetching the download URL automatically. If it does not start, click the download button in that window.",
-    "nexusmods.captureTimeout": "Timed out while fetching the Nexus Mods download URL automatically. Click the download button in the window and try again."
+    "nexusmods.captureTimeout": "Timed out while fetching the Nexus Mods download URL automatically. Click the download button in the window and try again.",
+    "conflict.audioUncertain": "Separate audio pak – game decides",
+    "conflict.orderHint": "Mods higher in the list win. Drag a mod above another to make it win, then click Save changes to reinstall.",
+    "conflict.thisWins": "This mod wins",
+    "conflict.thisLoses": "Overridden",
+    "conflict.assetCount": "{{count}} shared file(s)",
+    "conflict.overrides": "overrides",
+    "conflict.reportSummary": "{{pairs}} conflicting pair(s) across {{mods}} mods. Expand a row to see the shared files.",
+    "conflict.reportTitle": "Mod Conflicts",
+    "conflict.clickForDetails": "click for details",
+    "localMods.someNotAdded": "{{count}} line(s) skipped: not an existing .pak, .zip or unpacked mod folder",
+    "localMods.pastePlaceholder": "Paste file paths here (or copied .pak/.zip files)"
 }

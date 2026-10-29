@@ -58,6 +58,10 @@ export interface EventPayloads {
     text: string;
     groupId: number;
     addModType: string;
+    /** Local mod paths to add to the Local tab (merged with what's already there) */
+    paths?: string[];
+    /** Changes on every open so repeated identical content still updates the dialog */
+    revision?: number;
   };
 
   /** 添加模组对话框确认 */
@@ -66,6 +70,9 @@ export interface EventPayloads {
     groupId: number;
     list: string[];
     modInfoList?: any[];
+    /** Both tabs' contents, so links and files gathered together are all added */
+    onlineList?: string[];
+    localList?: string[];
   };
 
   /** 添加模组对话框关闭 */

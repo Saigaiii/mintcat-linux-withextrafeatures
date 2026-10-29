@@ -1,6 +1,6 @@
 import {t} from "i18next";
 import React, {useState} from "react";
-import {Dropdown, MenuProps, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
+import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
 import {
     ClockCircleOutlined,
     DeleteOutlined,
@@ -33,6 +33,7 @@ import type {CompleteModData} from "@/storage/dao/ModDAO";
 import {TimeUtils} from "@/utils/TimeUtils.ts";
 import type {FolderInfo} from "./TreeView";
 import {ConflictService} from "@/services/ConflictService";
+import {ModConflictDetails} from "@/components/ConflictDetails";
 
 const {useToken} = theme;
 
@@ -749,11 +750,27 @@ function ModTreeViewWarring({nodeData}) {
         <>
             {
                 hasConflict &&
-                <Tooltip title={getConflictTooltip()}>
-                                <span style={{color: "#faad14", marginRight: "4px"}}>
+                <Popover trigger="click"
+                         placement="bottomLeft"
+                         destroyOnHidden
+                         title={t("File conflict")}
+                         content={
+                             // Portal clicks bubble to the tree row in React; keep them here
+                             <div onClick={(e) => e.stopPropagation()}
+                                  onDoubleClick={(e) => e.stopPropagation()}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  onContextMenu={(e) => e.stopPropagation()}>
+                                 <ModConflictDetails modId={nodeData.modId}/>
+                             </div>
+                         }>
+                    <Tooltip title={`${getConflictTooltip()} — ${t("conflict.clickForDetails")}`}>
+                                <span style={{color: "#faad14", marginRight: "4px", cursor: "pointer"}}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onMouseDown={(e) => e.stopPropagation()}>
                                     <WarningOutlined/>
                                 </span>
-                </Tooltip>
+                    </Tooltip>
+                </Popover>
             }
 
             {

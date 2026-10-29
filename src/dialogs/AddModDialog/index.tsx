@@ -10,6 +10,7 @@ import {autoBind} from "@/utils/ReactUtils.ts";
 import {DialogProfileService} from "@/services/DialogProfileService.ts";
 import {AppInitializer} from "@/core/AppInitializer";
 import {registerIoC} from "@/core/IoCRegistration.ts";
+import {mergeLines} from "@/utils/LocalModPaths";
 
 export enum AddModType {
     ONLINE = "online",
@@ -25,6 +26,9 @@ interface AddModDialogStates {
     groupId?: number;
     loading?: boolean;
     text?: string;
+    textRevision?: number;
+    paths?: string[];
+    pathsRevision?: number;
 }
 
 export interface AddModDialogResult {
@@ -32,6 +36,8 @@ export interface AddModDialogResult {
     groupId?: number;
     list?: string[];
     modInfoList?: any[];
+    onlineList?: string[];
+    localList?: string[];
 }
 
 export class AddModDialog extends BasePage<any, AddModDialogStates> {
@@ -57,14 +63,17 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
     private async handleOk() {
         let list: string[] = [];
         let modInfoList: any[] | undefined;
+        // Links and local files can be gathered in both tabs; add all of them
+        const onlineList: string[] = this.onlineFormRef.current?.submit() ?? [];
+        const localList: string[] = this.localFormRef.current?.submit() ?? [];
 
         switch (this.state.addModType) {
             case AddModType.ONLINE: {
-                list = this.onlineFormRef.current?.submit();
+                list = onlineList;
                 break;
             }
             case AddModType.LOCAL: {
-                list = this.localFormRef.current?.submit();
+                list = localList;
                 break;
             }
             case AddModType.SUBSCRIBED: {
@@ -77,7 +86,11 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
                 break;
         }
 
-        if (list.length === 0 && (!modInfoList || modInfoList.length === 0)) {
+        const isFileOrLinkTab = this.state.addModType !== AddModType.SUBSCRIBED;
+        const nothingGathered = isFileOrLinkTab
+            ? onlineList.length === 0 && localList.length === 0
+            : list.length === 0 && (!modInfoList || modInfoList.length === 0);
+        if (nothingGathered) {
             message.warning(t("Please input mod"));
             return;
         }
@@ -87,6 +100,7 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
             addModType: this.state.addModType!,
             list: list,
             modInfoList: modInfoList,
+            ...(isFileOrLinkTab ? {onlineList, localList} : {}),
         });
     }
 
@@ -203,6 +217,9 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
             addModType: initData.addModType,
             groupId: resolvedGroupId,
             text: initData.text,
+            textRevision: initData.revision ?? 0,
+            paths: initData.paths ?? [],
+            pathsRevision: initData.revision ?? 0,
         });
 
         // ✅ Listen for dialog data updates (when window is reused)
@@ -214,13 +231,27 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
             // Reload group options to ensure they're up-to-date
             const groupFolders = await this.loadGroupOptions();
 
-            const resolvedGroupId = this.resolveGroupId(payload.groupId, groupFolders);
+            // Dialog already open: keep the chosen group unless a specific one was requested
+            const resolvedGroupId = payload.groupId
+                ? this.resolveGroupId(payload.groupId, groupFolders)
+                : (this.state.groupId || this.resolveGroupId(0, groupFolders));
 
-            this.setState({
+            // Append new links/paths to what is already gathered instead of replacing it
+            const revision = payload.revision ?? Date.now();
+            const update: AddModDialogStates = {
                 addModType: payload.addModType,
                 groupId: resolvedGroupId,
-                text: payload.text
-            });
+            };
+            if (payload.text) {
+                const currentText: string = this.onlineFormRef.current?.getText?.() ?? this.state.text ?? "";
+                update.text = mergeLines(currentText, payload.text);
+                update.textRevision = revision;
+            }
+            if (payload.paths && payload.paths.length > 0) {
+                update.paths = payload.paths;
+                update.pathsRevision = revision;
+            }
+            this.setState(update);
         });
     }
 
@@ -244,13 +275,19 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
                               {
                                   key: AddModType.LOCAL,
                                   label: t("Local"),
-                                  children: <LocalTab ref={this.localFormRef}/>,
+                                  // Keep mounted so gathered files are submitted from any tab
+                                  forceRender: true,
+                                  children: <LocalTab ref={this.localFormRef}
+                                                      paths={this.state.paths}
+                                                      revision={this.state.pathsRevision}/>,
                               },
                               {
                                   key: AddModType.ONLINE,
                                   label: t("Online"),
+                                  forceRender: true,
                                   children: <OnlineTab ref={this.onlineFormRef}
-                                                       text={this.state.text}/>,
+                                                       text={this.state.text}
+                                                       revision={this.state.textRevision}/>,
                               },
                               {
                                   key: AddModType.SUBSCRIBED,

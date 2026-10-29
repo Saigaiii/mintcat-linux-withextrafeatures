@@ -4,7 +4,8 @@ import { IoC } from '@/core/IoC.ts';
 import { StorageAPI } from '@/storage';
 import { exists, stat } from '@tauri-apps/plugin-fs';
 import { t } from 'i18next';
-import { ConflictService, ModConflictResponse } from '@/services/ConflictService';
+import { ConflictService, ConflictModMeta, ModConflictResponse } from '@/services/ConflictService';
+import { flattenTreeModIds, sortByDisplayOrder } from '@/utils/ModDisplayOrder';
 import { emitEvent } from '@/events';
 import { BackendRuntimeApi } from '@/apis/BackendRuntimeApi';
 
@@ -74,7 +75,12 @@ export class ModConflictCheckTask implements ITask {
 
         // Get enabled mods from profile
         const profileMods = await profilesDAO.getProfileMods(activeProfileData.id);
-        const enabledProfileMods = profileMods.filter(pm => pm.isEnabled);
+        const displayOrder = flattenTreeModIds(await profileVM.getActiveProfileTreeRoot());
+        const enabledProfileMods = sortByDisplayOrder(
+            profileMods.filter(pm => pm.isEnabled),
+            displayOrder,
+            pm => pm.modId
+        );
 
         if (enabledProfileMods.length === 0) {
             await context.setMessage(t('No enabled mods'));
@@ -90,6 +96,10 @@ export class ModConflictCheckTask implements ITask {
         await context.setStep(t('Prepare mod data'), 2, TOTAL_STEPS);
         
         const modInfoList: ConflictCheckModInfo[] = [];
+        const modMeta = new Map<number, ConflictModMeta>();
+        // Same rule as ModInstallTask: big Audio-tagged paks are copied as their own pak
+        const AUDIO_TAG = 'Audio';
+        const AUDIO_DIRECT_COPY_MIN_SIZE = 10 * 1024 * 1024;
         
         for (let i = 0; i < enabledProfileMods.length; i++) {
             if (context.checkCancelled()) {
@@ -124,6 +134,12 @@ export class ModConflictCheckTask implements ITask {
                 cache_path: cachePath,
                 is_unpacked: isUnpacked,
             });
+            modMeta.set(modData.modId!, {
+                name: modData.displayName || modData.nameId || `#${modData.modId}`,
+                audioOnly: !isUnpacked
+                    && (modData.tags?.includes(AUDIO_TAG) ?? false)
+                    && (modData.download?.fileSize ?? 0) >= AUDIO_DIRECT_COPY_MIN_SIZE,
+            });
 
             await context.setMessage(`${t('Preparing')} (${i + 1}/${enabledProfileMods.length}): ${modData.displayName}`);
         }
@@ -157,7 +173,7 @@ export class ModConflictCheckTask implements ITask {
                 ConflictService.clearAll();
             } else {
                 // Store conflicts in service
-                ConflictService.setConflicts(conflicts);
+                ConflictService.setConflicts(conflicts, modMeta);
                 
                 const conflictCount = conflicts.length;
                 await context.setMessage(`${t('Detected')} ${conflictCount} ${t('mods with conflicts')}`);

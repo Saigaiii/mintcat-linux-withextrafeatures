@@ -3,18 +3,19 @@ import {Flex, Form} from "antd";
 import {t} from "i18next";
 import TextArea from "antd/es/input/TextArea";
 
-export const OnlineTab = React.forwardRef(({text}: any, ref) => {
+export const OnlineTab = React.forwardRef(({text, revision}: any, ref) => {
 
-    const [url, setUrl] = useState<string>(text);
+    const [url, setUrl] = useState<string>(text ?? "");
 
-    // 当 text prop 变化时更新 url state
+    // 当 text prop 变化时更新 url state (the dialog already merged new links into it)
     useEffect(() => {
         if (text !== undefined) {
             setUrl(text);
         }
-    }, [text]);
+    }, [text, revision]);
 
     React.useImperativeHandle(ref, () => ({
+        getText: () => url,
         submit: () => {
             const result: string[] = [];
             if (!url) {

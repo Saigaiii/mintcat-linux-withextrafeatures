@@ -4,10 +4,11 @@ import {path} from "@tauri-apps/api";
 import {useEventListener} from "@/events";
 import {getCurrentWindow} from "@tauri-apps/api/window";
 import React, {useEffect, useState} from "react";
-import {Button, Flex, Form, List} from "antd";
+import {Button, Flex, Form, Input, List, message} from "antd";
 import {t} from "i18next";
 import {CloseOutlined, FilePptOutlined, FileZipOutlined, FolderOutlined, FolderOpenOutlined, InboxOutlined} from "@ant-design/icons";
 import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
+import {parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
 
 
 interface FileItem {
@@ -52,9 +53,10 @@ async function makeFileItem(filePath: string): Promise<FileItem> {
     };
 }
 
-export const LocalTab = React.forwardRef(({}: any, ref) => {
+export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
 
     const [fileList, setFileList] = useState<FileItem[]>([]);
+    const [pasteText, setPasteText] = useState<string>("");
 
     React.useImperativeHandle(ref, () => ({
         submit: () => {
@@ -63,9 +65,14 @@ export const LocalTab = React.forwardRef(({}: any, ref) => {
     }));
 
 
-    const addFileList = async (filePath: string) => {
-        if (!(await exists(filePath))) {
-            return;
+    /** Returns true if the path is a usable mod (.pak/.zip/unpacked folder) */
+    const addFileList = async (filePath: string): Promise<boolean> => {
+        try {
+            if (!(await exists(filePath))) {
+                return false;
+            }
+        } catch {
+            return false;
         }
 
         const fileInfo = await stat(filePath);
@@ -75,12 +82,12 @@ export const LocalTab = React.forwardRef(({}: any, ref) => {
         if (fileInfo.isDirectory) {
             // For directories, only accept if it's a valid unpacked mod
             if (!fileItem.isUnpackedMod) {
-                return;
+                return false;
             }
         } else {
             // For files, only accept .pak or .zip
-            if (!(filePath.endsWith(".zip") || filePath.endsWith(".pak"))) {
-                return;
+            if (!/\.(zip|pak)$/i.test(filePath)) {
+                return false;
             }
         }
 
@@ -90,7 +97,59 @@ export const LocalTab = React.forwardRef(({}: any, ref) => {
             }
             return [...prevList, fileItem];
         });
+        return true;
     }
+
+    /** Add every path in pasted text (plain paths, quoted paths or file:// URIs) */
+    const addPastedText = async (text: string) => {
+        let homeDir: string | undefined;
+        try {
+            homeDir = await path.homeDir();
+        } catch {
+            homeDir = undefined;
+        }
+        let skipped = 0;
+        for (const line of splitLines(text)) {
+            const localPath = parseLocalPathLine(line, homeDir);
+            if (!localPath || !(await addFileList(localPath))) {
+                skipped++;
+            }
+        }
+        if (skipped > 0) {
+            message.warning(t("localMods.someNotAdded", {count: skipped}));
+        }
+    }
+
+    const onPaste = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+        // Files copied in a file manager arrive as text/uri-list; plain text otherwise
+        const text = e.clipboardData.getData("text/uri-list") || e.clipboardData.getData("text/plain");
+        if (!text) {
+            return;
+        }
+        e.preventDefault();
+        setPasteText("");
+        await addPastedText(text);
+    }
+
+    const onPasteEnter = async () => {
+        const text = pasteText;
+        setPasteText("");
+        if (text.trim()) {
+            await addPastedText(text);
+        }
+    }
+
+    // Paths sent by the clipboard watcher (merged into the list, never replacing it)
+    useEffect(() => {
+        if (!paths || paths.length === 0) {
+            return;
+        }
+        (async () => {
+            for (const p of paths) {
+                await addFileList(p);
+            }
+        })();
+    }, [paths, revision]);
 
     const onSelectPathClick = async () => {
         const results = await open({
@@ -177,16 +236,24 @@ export const LocalTab = React.forwardRef(({}: any, ref) => {
                     </p>
                 </div>
             </Flex>
+            <Input style={{marginTop: 8}}
+                   value={pasteText}
+                   allowClear
+                   placeholder={t("localMods.pastePlaceholder")}
+                   onChange={(e) => setPasteText(e.target.value)}
+                   onPaste={onPaste}
+                   onPressEnter={onPasteEnter}
+            />
             <br/>
             <Form.Item label={`${t("Selected Files")} ${fileList.length}`}>
                 <div className={"app-drag-list"}
                      style={{
-                         height: window.innerHeight - 400,
+                         height: window.innerHeight - 440,
                      }}>
                     <List size={"small"}
                           dataSource={fileList}
                           style={{
-                              height: window.innerHeight - 400,
+                              height: window.innerHeight - 440,
                           }}
                           renderItem={item => (
                               <List.Item className={"app-drag-list-item"}>

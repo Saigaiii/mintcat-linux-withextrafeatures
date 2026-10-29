@@ -519,5 +519,16 @@
 	"nexusmods.nxmDownloadStarted": "Nexus Mods 下载已完成。",
 	"nexusmods.webviewOpened": "已打开 Nexus Mods 下载窗口，请在窗口内点击下载按钮。",
 	"nexusmods.webviewAutoOpened": "已打开 Nexus Mods 下载窗口，正在自动获取下载地址；若未自动开始，请在窗口内点击下载按钮。",
-	"nexusmods.captureTimeout": "自动获取 Nexus Mods 下载地址超时，请在窗口内手动点击下载按钮后重试。"
+	"nexusmods.captureTimeout": "自动获取 Nexus Mods 下载地址超时，请在窗口内手动点击下载按钮后重试。",
+	"conflict.audioUncertain": "独立音频 pak（由游戏决定）",
+	"conflict.orderHint": "列表中靠上的 Mod 优先。将 Mod 拖到另一个之上即可让它生效，然后点击保存更改重新安装。",
+	"conflict.thisWins": "此 Mod 生效",
+	"conflict.thisLoses": "被覆盖",
+	"conflict.assetCount": "{{count}} 个共享文件",
+	"conflict.overrides": "覆盖",
+	"conflict.reportSummary": "{{mods}} 个 Mod 之间共有 {{pairs}} 组冲突。展开一行查看共享文件。",
+	"conflict.reportTitle": "Mod 冲突",
+	"conflict.clickForDetails": "点击查看详情",
+	"localMods.someNotAdded": "已跳过 {{count}} 行：不是存在的 .pak、.zip 或解包 Mod 文件夹",
+	"localMods.pastePlaceholder": "在此粘贴文件路径（或已复制的 .pak/.zip 文件）"
 }

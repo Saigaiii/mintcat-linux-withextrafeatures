@@ -16,6 +16,7 @@ import { ensureInternalAssets } from '@/services/InternalAssetService';
 import { md5 } from '@/utils/CryptApi';
 import { isUe4ssEnabled } from '@/utils/Ue4ssSetting';
 import { BackendRuntimeApi } from '@/apis/BackendRuntimeApi';
+import { flattenTreeModIds, sortByDisplayOrder } from '@/utils/ModDisplayOrder';
 
 /**
  * Check if a path is a valid unpacked mod directory
@@ -160,8 +161,15 @@ export class ModInstallTask implements ITask {
         const activeProfileData = await profileVM.getActiveProfileData();
 
         // Get profile mods (with enabled status)
+        // Install in the order the list shows (top of the list wins file conflicts).
+        // getProfileMods sorts by per-folder sortOrder, which interleaves folders.
         const profileMods = await profilesDAO.getProfileMods(activeProfileData.id!);
-        const enabledProfileMods = profileMods.filter(pm => pm.isEnabled);
+        const displayOrder = flattenTreeModIds(await profileVM.getActiveProfileTreeRoot());
+        const enabledProfileMods = sortByDisplayOrder(
+            profileMods.filter(pm => pm.isEnabled),
+            displayOrder,
+            pm => pm.modId
+        );
         const isEmptyProfile = enabledProfileMods.length === 0;
 
         if (!isEmptyProfile) {

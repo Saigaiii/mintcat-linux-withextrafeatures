@@ -18,6 +18,10 @@ import {frontendRouteUrl} from "@/utils/FrontendUpdateRuntime.ts";
 import {ModUpdateService} from "@/services/ModUpdateService.ts";
 import type {AddModFromUrlResult} from "@/services/HomeService.ts";
 import type {AddModFromPathResult} from "@/services/HomeService.ts";
+import {exists} from "@tauri-apps/plugin-fs";
+import {path as tauriPath} from "@tauri-apps/api";
+import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
+import {isModArchivePath, parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
 
 let windowInstance: WebviewWindow;
 
@@ -25,19 +29,25 @@ type AddModDialogInitData = {
     text: string;
     groupId: number;
     addModType: string;
+    paths?: string[];
+    revision?: number;
 };
 
 export async function openWindow(addModType: string = AddModType.LOCAL,
                                  groupId: number = 0,
                                  text: string = "",
-                                 onUpdated?: () => Promise<void>): Promise<void> {
+                                 onUpdated?: () => Promise<void>,
+                                 paths: string[] = []): Promise<void> {
 
     const vm = await IoC.get(HomeViewModel);
 
+    // If the dialog is already open, it appends this text/paths instead of replacing
     const initData: AddModDialogInitData = {
         text,
         groupId,
         addModType,
+        paths,
+        revision: Date.now(),
     };
 
     const setInitData = (data: AddModDialogInitData) => {
@@ -59,7 +69,7 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
     windowInstance = new WebviewWindow('add-mod-dialog', {
         url: frontendRouteUrl(`/add_mod_dialog?init=${encodeURIComponent(JSON.stringify(initData))}`),
         width: 400,
-        height: 580,
+        height: 620,
         title: t("Add Mod"),
         dragDropEnabled: true,
     });
@@ -86,19 +96,26 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
                 }
                 break;
             }
-            case AddModType.ONLINE: {
-                await addOnlineMods(vm, result.list, result.groupId);
-            }
-                break;
+            case AddModType.ONLINE:
             case AddModType.LOCAL: {
-                const list = result.list;
-                const pathResults: AddModFromPathResult[] = [];
-                for (const item of list) {
-                    pathResults.push(await vm.addModFromPath(item, result.groupId));
+                // Add everything gathered in both tabs (copied files and links can pile up together)
+                const localList = [...new Set(result.localList
+                    ?? (result.addModType === AddModType.LOCAL ? result.list : []))];
+                const onlineList = [...new Set(result.onlineList
+                    ?? (result.addModType === AddModType.ONLINE ? result.list : []))];
+
+                if (localList.length > 0) {
+                    const pathResults: AddModFromPathResult[] = [];
+                    for (const item of localList) {
+                        pathResults.push(await vm.addModFromPath(item, result.groupId));
+                    }
+                    const existsCount = pathResults.filter((r) => r.status === "exists").length;
+                    if (existsCount > 0) {
+                        message.warning(t("Mod Already Exists") + ` (${existsCount} ${t("in current list")})`);
+                    }
                 }
-                const existsCount = pathResults.filter((r) => r.status === "exists").length;
-                if (existsCount > 0) {
-                    message.warning(t("Mod Already Exists") + ` (${existsCount} ${t("in current list")})`);
+                if (onlineList.length > 0) {
+                    await addOnlineMods(vm, onlineList, result.groupId);
                 }
             }
                 break;
@@ -196,37 +213,75 @@ async function downloadNexusModsAfterAdd(results: AddModFromUrlResult[]): Promis
     }
 }
 
+function isModLink(link: string): boolean {
+    return !!ModioApi.parseModLinks(link)
+        || ModcatApi.isModcatLink(link)
+        || NexusModsApi.isNexusModsLink(link);
+}
+
+async function isUnpackedModDir(dirPath: string): Promise<boolean> {
+    try {
+        return await BackendRuntimeApi.invoke<boolean>('is_valid_unpacked_mod', {path: dirPath});
+    } catch {
+        return false;
+    }
+}
+
 async function onClipboardChange(text: string) {
     if (!text) {
         return;
     }
-    const links = text.split("\n").map(l => l.trim()).filter(l => l);
-    
-    // 检查是否所有链接都是有效的 mod 链接（mod.io、ModCat 或 Nexus Mods）
-    let hasModioLinks = false;
-    let hasModcatLinks = false;
-    let hasNexusModsLinks = false;
-    
-    for (const link of links) {
-        const isModio = !!ModioApi.parseModLinks(link);
-        const isModcat = ModcatApi.isModcatLink(link);
-        const isNexusMods = NexusModsApi.isNexusModsLink(link);
-        
-        if (!isModio && !isModcat && !isNexusMods) {
-            return; // 存在无效链接，不处理
-        }
-        
-        if (isModio) hasModioLinks = true;
-        if (isModcat) hasModcatLinks = true;
-        if (isNexusMods) hasNexusModsLinks = true;
-    }
-
-    // 如果没有任何有效链接，不处理
-    if (!hasModioLinks && !hasModcatLinks && !hasNexusModsLinks) {
+    const lines = splitLines(text);
+    if (lines.length === 0) {
         return;
     }
 
-    openWindow(AddModType.ONLINE, 0, text).then();
+    let homeDir: string | undefined;
+    try {
+        homeDir = await tauriPath.homeDir();
+    } catch {
+        homeDir = undefined;
+    }
+
+    // Every line must be a mod link or an existing local mod (.pak/.zip/unpacked folder);
+    // anything else means the user copied something unrelated, so ignore it.
+    const links: string[] = [];
+    const paths: string[] = [];
+    for (const line of lines) {
+        if (isModLink(line)) {
+            links.push(line);
+            continue;
+        }
+        const localPath = parseLocalPathLine(line, homeDir);
+        if (!localPath) {
+            return;
+        }
+        // The game's own paks (copied when setting the game path) are not mods
+        const normalized = localPath.replace(/\\/g, "/").toLowerCase();
+        if (normalized.endsWith("/fsd-windowsnoeditor.pak")
+            || normalized.includes("/fsd/content/paks/")
+            || normalized.includes("/roguecore/content/paks/")) {
+            return;
+        }
+        try {
+            if (!(await exists(localPath))) {
+                return;
+            }
+        } catch {
+            return;
+        }
+        if (!isModArchivePath(localPath) && !(await isUnpackedModDir(localPath))) {
+            return;
+        }
+        paths.push(localPath);
+    }
+
+    if (links.length === 0 && paths.length === 0) {
+        return;
+    }
+
+    const addModType = links.length > 0 ? AddModType.ONLINE : AddModType.LOCAL;
+    openWindow(addModType, 0, links.join("\n"), undefined, paths).then();
 }
 
 

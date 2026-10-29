@@ -140,10 +140,18 @@ pub fn check_mod_conflicts(
         match files {
             Ok(file_list) => {
                 for file_path in file_list {
-                    file_to_mods
-                        .entry(file_path)
-                        .or_default()
-                        .push(mod_info.mod_id);
+                    // The installer never writes these from mods (see pak_integrator),
+                    // so they can't conflict in practice.
+                    if file_path.ends_with("assetregistry.bin")
+                        || file_path.ends_with(".ushaderbytecode")
+                    {
+                        continue;
+                    }
+                    let ids = file_to_mods.entry(file_path).or_default();
+                    // A mod with several paks can list a path twice; that's not a conflict
+                    if !ids.contains(&mod_info.mod_id) {
+                        ids.push(mod_info.mod_id);
+                    }
                 }
             }
             Err(error) => {
@@ -184,4 +192,54 @@ pub fn check_mod_conflicts(
             },
         )
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_pak(path: &std::path::Path, files: &[&str]) {
+        let file = fs::File::create(path).unwrap();
+        let mut writer = repak::PakBuilder::new().writer(
+            std::io::BufWriter::new(file),
+            repak::Version::V11,
+            "../../../".to_string(),
+            None,
+        );
+        for f in files {
+            writer.write_file(f, false, b"data".to_vec()).unwrap();
+        }
+        writer.write_index().unwrap();
+    }
+
+    fn info(id: i64, path: &std::path::Path) -> ConflictCheckModInfo {
+        serde_json::from_value(serde_json::json!({
+            "mod_id": id,
+            "cache_path": path.to_str().unwrap(),
+            "is_unpacked": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn reports_real_overlaps_and_ignores_files_the_installer_skips() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.pak");
+        let b = dir.path().join("b.pak");
+        let c = dir.path().join("c.pak");
+        write_pak(&a, &["FSD/Content/Gun.uasset", "FSD/Content/Gun.uexp", "FSD/AssetRegistry.bin"]);
+        write_pak(&b, &["FSD/Content/Gun.uasset", "FSD/Content/Gun.uexp", "FSD/AssetRegistry.bin"]);
+        // Shares only skipped files with the others: must not be a conflict
+        write_pak(&c, &["FSD/Content/Other.uasset", "FSD/AssetRegistry.bin", "FSD/Content/S.ushaderbytecode"]);
+
+        let mut result = check_mod_conflicts(&[info(1, &a), info(2, &b), info(3, &c)], None);
+        result.sort_by_key(|m| m.mod_id);
+
+        assert_eq!(result.len(), 2, "only mods 1 and 2 conflict: {:?}", result.iter().map(|m| m.mod_id).collect::<Vec<_>>());
+        assert_eq!(result[0].mod_id, 1);
+        assert_eq!(result[0].conflicting_mods, vec![2]);
+        let mut files = result[0].conflicting_files.clone();
+        files.sort();
+        assert_eq!(files, vec!["fsd/content/gun.uasset", "fsd/content/gun.uexp"]);
+    }
 }

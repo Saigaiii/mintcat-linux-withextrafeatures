@@ -55,6 +55,9 @@ import {
     clearCachedDownloadProgress,
 } from "./TreeViewItem.tsx";
 import { computeInstallManifestHash } from "@/tasks/ModInstallTask";
+import { flattenTreeModIds, sortByDisplayOrder } from "@/utils/ModDisplayOrder";
+import { ConflictService } from "@/services/ConflictService";
+import { ConflictReport } from "@/components/ConflictDetails";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
 import { isUe4ssEnabled } from "@/utils/Ue4ssSetting";
 
@@ -127,7 +130,13 @@ export class HomePage extends BasePage<any, ModListPageState> {
             const profilesDAO = await StorageAPI.getProfiles();
             const activeProfile = await profileVM.getActiveProfileData();
             const profileMods = await profilesDAO.getProfileMods(activeProfile.id!);
-            const enabledProfileMods = profileMods.filter(pm => pm.isEnabled);
+            // Same order as ModInstallTask so the hash matches after install
+            const displayOrder = flattenTreeModIds(await profileVM.getActiveProfileTreeRoot());
+            const enabledProfileMods = sortByDisplayOrder(
+                profileMods.filter(pm => pm.isEnabled),
+                displayOrder,
+                pm => pm.modId
+            );
 
             const modsDAO = await StorageAPI.getMods();
             const enabledMods: CompleteModData[] = [];
@@ -553,15 +562,43 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     @autoBind
     private async onMenuBarCheckConflictsClick() {
+        let taskId: string;
         try {
-            await taskQueueAPI.addTask({
+            taskId = await taskQueueAPI.addTask({
                 taskType: 'mod_conflict_check',
                 params: {},
             });
         } catch (e) {
             console.error('error.startConflictCheck task:', e);
             message.error(t("error.startConflictCheck"));
+            return;
         }
+
+        // Show which mods clash, on which files, and which one wins
+        try {
+            const result = await taskQueueAPI.waitForTaskCompletion(taskId);
+            if (result.status !== 'completed') {
+                return;
+            }
+            if (ConflictService.getAllConflicts().length === 0) {
+                message.success(t("No conflicts detected"));
+                return;
+            }
+            this.showConflictReport();
+        } catch (e) {
+            console.warn('[HomePage] Conflict check result unavailable', e);
+        }
+    }
+
+    @autoBind
+    private showConflictReport() {
+        MessageBox.info({
+            title: t("conflict.reportTitle"),
+            icon: null,
+            width: 680,
+            maskClosable: true,
+            content: React.createElement(ConflictReport),
+        });
     }
 
     @autoBind
