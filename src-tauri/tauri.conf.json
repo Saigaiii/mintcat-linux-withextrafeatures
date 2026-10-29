@@ -42,6 +42,9 @@
     "fs": {
       "requireLiteralLeadingDot": false
     },
+    "opener": {
+      "requireLiteralLeadingDot": false
+    },
     "updater": {
       "windows": {
         "installMode": "basicUi"
