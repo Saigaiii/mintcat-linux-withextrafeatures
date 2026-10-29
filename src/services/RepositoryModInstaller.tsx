@@ -13,6 +13,7 @@ import {DownloadApi} from "@/apis/DownloadApi";
 import {MessageBox} from "@/components/MessageBox";
 import StatusBar from "@/components/StatusBar";
 import {logActivity} from "@/services/ActivityLog";
+import {RepositoryUpdates} from "@/services/RepositoryUpdates";
 import {openWindow} from "@/dialogs/AddModDialog/open";
 import {AddModType} from "@/dialogs/AddModDialog";
 
@@ -125,6 +126,15 @@ export async function addRepositoryMod(item: SearchResultItem): Promise<void> {
             await StatusBar.info(t("repo.downloading", {name}));
             await DownloadApi.downloadFile(file.downloadUrl, target, {resume: false, retryCount: 2});
             downloaded.push(target);
+            // So the Update button can find newer uploads of this file later
+            await RepositoryUpdates.rememberDownloadedFile(target, {
+                repoId: repo.id,
+                slug: raw.slug,
+                filename: file.filename,
+                postedAt: file.postedAt,
+                sizeBytes: file.sizeBytes,
+                via: 'added',
+            });
             await logActivity('success', t("repo.downloaded", {name, repo: repo.name}), file.downloadUrl, 'repository');
         } catch (error) {
             await logActivity('error', t("repo.downloadFailed", {name, reason: String(error)}), file.downloadUrl, 'repository');

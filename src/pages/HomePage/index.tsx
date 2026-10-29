@@ -12,7 +12,7 @@ import {
     CheckSquareOutlined, ClearOutlined, CloseCircleOutlined, CloseOutlined, CopyOutlined,
     DeleteOutlined,
     EditOutlined, FieldTimeOutlined, LoadingOutlined, MinusSquareOutlined, PauseCircleOutlined, PlayCircleOutlined,
-    PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined,
+    PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined,
     UnorderedListOutlined, WarningOutlined
 } from "@ant-design/icons";
 import * as checkbox from "antd/es/checkbox";
@@ -57,6 +57,10 @@ import {
 } from "./TreeViewItem.tsx";
 import { computeInstallManifestHash } from "@/tasks/ModInstallTask";
 import { flattenTreeModIds, sortByDisplayOrder } from "@/utils/ModDisplayOrder";
+import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
+import { RepositoryUpdates } from "@/services/RepositoryUpdates";
+import { logActivity } from "@/services/ActivityLog";
+import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
 import { ConflictService } from "@/services/ConflictService";
 import { ConflictReport } from "@/components/ConflictDetails";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
@@ -79,6 +83,8 @@ interface ModListPageState {
     totalCount?: number;
     sortOrder?: string;
     hasUnsavedChanges?: boolean;
+    /** Local mod being linked to a repository post (Link to Pak Hub post…) */
+    repoLinkMod?: CompleteModData | null;
 }
 
 
@@ -535,6 +541,18 @@ export class HomePage extends BasePage<any, ModListPageState> {
         if (onlineMods.length > 0) {
             await ModUpdateService.refreshOnlineMetadata(onlineMods, 3);
         }
+        // Local mods that come from a Pak Hub style repository
+        try {
+            const repoResult = await RepositoryUpdates.checkAll(scopedMods);
+            if (repoResult.updated > 0 || repoResult.flagged > 0 || repoResult.linked > 0) {
+                await logActivity('info', t("repoUpdate.summary", repoResult), undefined, 'repository');
+            }
+            if (repoResult.flagged > 0) {
+                message.warning(t("repoUpdate.flaggedToast", {count: repoResult.flagged}));
+            }
+        } catch (e) {
+            console.warn('[HomePage] repository update check failed', e);
+        }
         await this.updateTreeView();
         await this.updateCountLabel();
         message.success(t("Update Finish"));
@@ -730,6 +748,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
         converter.convertToFromRoot(activeRoot);
+        // Global install positions (folders included) for the row badges and conflict winners
+        InstallOrder.set(flattenTreeModIds(activeRoot));
 
         let newExpandedKeys: any[];
         
@@ -832,6 +852,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
         converter.convertToFromRoot(activeRoot);
+        // Global install positions (folders included) for the row badges and conflict winners
+        InstallOrder.set(flattenTreeModIds(activeRoot));
 
         let newExpandedKeys: any[];
         
@@ -948,9 +970,29 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 break;
             case "update": {
                 const mod = await this.getModById(id);
-                if (mod) {
+                if (mod && mod.sourceType === ModSourceType.Local) {
+                    // Local mods can be updated from the repository post they're linked to
+                    try {
+                        const outcome = await RepositoryUpdates.updateOne(mod);
+                        if (outcome === 'notLinked') message.info(t("repoUpdate.notLinked"));
+                        else if (outcome === 'upToDate') message.success(t("repoUpdate.upToDate"));
+                        else shouldUpdateTree = true;
+                    } catch (e) {
+                        message.error(t("repoUpdate.failed", {name: mod.displayName, reason: String(e)}));
+                    }
+                } else if (mod) {
                     await ModUpdateService.updateMod(mod);
                 }
+            }
+                break;
+            case "repo_link": {
+                const mod = await this.getModById(id);
+                if (mod) this.setState({repoLinkMod: mod});
+            }
+                break;
+            case "repo_unlink": {
+                await RepositoryUpdates.removeLink(id);
+                message.success(t("repoLink.unlinked"));
             }
                 break;
             case "add_mod": {
@@ -1133,6 +1175,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
     render() {
         return (
             <div className="mod-list-page-card">
+                <RepositoryLinkDialog mod={this.state.repoLinkMod ?? null}
+                                      onClose={() => this.setState({repoLinkMod: null})}/>
                 <ProfileEditDialog ref={this.profileEditDialogRef}/>
                 <InputDialog ref={this.inputDialogRef}/>
                 <Spin spinning={this.state.loading}
@@ -1244,6 +1288,14 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                         <Button icon={<SortAscendingOutlined/>} type={"text"} />
                                     </Tooltip>
                                 </Dropdown>
+                                <Tooltip title={t(ListDisplayOptions.showLocalPaths() ? "list.hideLocalPaths" : "list.showLocalPaths")}>
+                                    <Button icon={<FolderOpenOutlined/>}
+                                            type={ListDisplayOptions.showLocalPaths() ? "default" : "text"}
+                                            onClick={() => {
+                                                ListDisplayOptions.setShowLocalPaths(!ListDisplayOptions.showLocalPaths());
+                                                this.forceUpdate();
+                                            }}/>
+                                </Tooltip>
                             </Typography.Link>
                             <Typography.Link className="tour-step-profile">
                                 <Select

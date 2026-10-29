@@ -63,6 +63,29 @@ export class ModioApi {
         }
     }
 
+    /**
+     * Resolve a mod.io link to its mod without showing any messages
+     * (used to check links in the Add Mod box as they're typed).
+     */
+    public static async lookupModLink(url: string): Promise<
+        | { status: 'found'; name: string }
+        | { status: 'notFound' }
+        | { status: 'invalid' }
+        | { status: 'error'; message: string }
+    > {
+        const nameId = ModioApi.parseModLinks(url.trim());
+        if (!nameId) {
+            return {status: 'invalid'};
+        }
+        try {
+            const data = await ModioApi.getRequest(`/games/${MODIO_GAME_ID}/mods?name_id=${encodeURIComponent(nameId)}`);
+            const mod = data?.data?.[0];
+            return mod ? {status: 'found', name: String(mod.name ?? nameId)} : {status: 'notFound'};
+        } catch (e) {
+            return {status: 'error', message: e instanceof Error ? e.message : String(e)};
+        }
+    }
+
     public static async getModInfoByLink(url: string): Promise<ModInfo> {
         const nameId = ModioApi.parseModLinks(url);
         if (nameId === undefined) {

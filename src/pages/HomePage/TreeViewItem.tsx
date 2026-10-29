@@ -1,7 +1,7 @@
 import {t} from "i18next";
-import React, {useState} from "react";
+import React, {useState, useSyncExternalStore} from "react";
 import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
-import {CloseCircleFilled} from "@ant-design/icons";
+import {CloseCircleFilled, DisconnectOutlined} from "@ant-design/icons";
 import {
     ClockCircleOutlined,
     DeleteOutlined,
@@ -33,8 +33,10 @@ import StatusBar from "@/components/StatusBar.tsx";
 import type {CompleteModData} from "@/storage/dao/ModDAO";
 import {TimeUtils} from "@/utils/TimeUtils.ts";
 import type {FolderInfo} from "./TreeView";
-import {ConflictService} from "@/services/ConflictService";
+import {ConflictService, type ModConflictSummary} from "@/services/ConflictService";
 import {ModConflictDetails} from "@/components/ConflictDetails";
+import {InstallOrder, useInstallOrderVersion, useShowLocalPaths} from "@/services/ListDisplay";
+import {RepositoryUpdates} from "@/services/RepositoryUpdates";
 
 const {useToken} = theme;
 
@@ -739,14 +741,24 @@ function ModTreeViewWarring({nodeData}) {
         [nodeData.modId]
     );
 
+    // Re-rate when the list order changes (winners depend on it)
+    useInstallOrderVersion();
+    useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
+    const repoUpdate = RepositoryUpdates.updateState(nodeData.modId);
+    const conflictSummary = hasConflict ? ConflictService.summarize(nodeData.modId, InstallOrder.get()) : 'harmless';
+    const conflictColor: Record<ModConflictSummary, string> = {
+        noEffect: '#ff4d4f',
+        losesGameplay: '#fa8c16',
+        losesCosmetic: '#fadb14',
+        harmless: '#8c8c8c',
+        winsAll: '#8c8c8c',
+    };
+
     // 生成冲突提示信息
     const getConflictTooltip = () => {
         const conflict = ConflictService.getConflict(nodeData.modId);
         if (!conflict) return t("conflict.withOtherMods");
-        
-        const fileCount = conflict.conflictingFiles.length;
-        const modCount = conflict.conflictingMods.length;
-        return `${t("File conflict")}: ${fileCount} ${t("files conflict with")} ${modCount} ${t("other mods")}`;
+        return t(`conflict.summary.${conflictSummary}`, {mods: conflict.conflictingMods.length});
     };
 
     return (
@@ -767,13 +779,23 @@ function ModTreeViewWarring({nodeData}) {
                              </div>
                          }>
                     <Tooltip title={`${getConflictTooltip()} — ${t("conflict.clickForDetails")}`}>
-                                <span style={{color: "#faad14", marginRight: "4px", cursor: "pointer"}}
+                                <span style={{color: conflictColor[conflictSummary], marginRight: "4px", cursor: "pointer"}}
                                       onClick={(e) => e.stopPropagation()}
                                       onMouseDown={(e) => e.stopPropagation()}>
                                     <WarningOutlined/>
                                 </span>
                     </Tooltip>
                 </Popover>
+            }
+
+            {
+                repoUpdate && repoUpdate.kind !== 'upToDate' &&
+                <Tooltip title={t(repoUpdate.kind === 'newer' ? "repoUpdate.iconNewer" : "repoUpdate.iconDiffers",
+                    {date: new Date(repoUpdate.latest.postedAt).toLocaleString()})}>
+                                <span style={{color: "orange", marginRight: "4px"}}>
+                                    <ClockCircleOutlined/>
+                                </span>
+                </Tooltip>
             }
 
             {
@@ -935,9 +957,33 @@ function ModTreeViewLocalTitle({nodeData}) {
         [nodeData.modId]
     );
 
+    const showPath = useShowLocalPaths();
+    const filePath: string = nodeData.url || "";
+
+    if (!showPath || !filePath) {
+        return (
+            <span style={{color: enabled ? token.colorText : token.colorTextSecondary}}>
+                {nodeData.title}
+            </span>
+        );
+    }
     return (
-        <span style={{color: enabled ? token.colorText : token.colorTextSecondary}}>
-            {nodeData.title}
+        <span style={{display: "inline-flex", flexDirection: "column", minWidth: 0, lineHeight: 1.25, padding: "1px 0"}}>
+            <span style={{color: enabled ? token.colorText : token.colorTextSecondary}}>
+                {nodeData.title}
+            </span>
+            <span title={filePath}
+                  style={{
+                      color: token.colorTextTertiary,
+                      fontSize: 11,
+                      fontFamily: "monospace",
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      maxWidth: "60vw",
+                  }}>
+                {filePath}
+            </span>
         </span>
     );
 }
@@ -1024,6 +1070,8 @@ export function TreeViewItem({
     itemOrder,
 }: TreeViewItemProps) {
     const {token} = useToken();
+    // Menu shows Link/Unlink depending on the mod's repository link
+    useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
 
     const [enabled, setEnabled] = useState(() =>
         getPendingEnabled(nodeData.modId, nodeData.enabled)
@@ -1065,7 +1113,18 @@ export function TreeViewItem({
         }] : []),
         {label: t('Delete'), key: 'delete', icon: <DeleteOutlined />},
         {label: t('Copy Link'), key: 'copy_link', icon: <LinkOutlined />},
-        {label: t('Export'), key: 'export', icon: <ExportOutlined />}
+        {label: t('Export'), key: 'export', icon: <ExportOutlined />},
+        ...(nodeData.sourceType === ModSourceType.Local ? [
+            {type: 'divider' as const},
+            {
+                label: t(RepositoryUpdates.linkForModSync(nodeData) ? 'repoLink.changeMenu' : 'repoLink.menu'),
+                key: 'repo_link',
+                icon: <LinkOutlined />,
+            },
+            ...(RepositoryUpdates.linkForModSync(nodeData)
+                ? [{label: t('repoLink.unlinkMenu'), key: 'repo_unlink', icon: <DisconnectOutlined />}]
+                : []),
+        ] : []),
     ];
 
     if (nodeData.isLeaf) {
@@ -1085,6 +1144,7 @@ export function TreeViewItem({
                       }}>
                 <ModTreeViewProgressBackground nodeData={nodeData}>
   
+                <Tooltip title={t("list.installPositionHint", {position: itemOrder ?? 1})} mouseEnterDelay={0.6}>
                 <span style={{
                         display: "inline-flex",
                         alignItems: "center",
@@ -1104,6 +1164,7 @@ export function TreeViewItem({
                     }}>
                         {itemOrder ?? 1}
                     </span>
+                </Tooltip>
 
                     <ModTreeViewSwitch nodeData={nodeData} onCountLabelUpdate={onCountLabelUpdate}/>
 

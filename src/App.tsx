@@ -9,6 +9,7 @@ import TitleBar from "@/components/TitleBar.tsx";
 import StatusBar from "@/components/StatusBar.tsx";
 import LogPanel from "@/components/LogPanel";
 import {initActivityLog} from "@/services/ActivityLog";
+import {RepositoryUpdates} from "@/services/RepositoryUpdates";
 import MenuBar, {MenuPage} from "@/components/MenuBar.tsx";
 import UpdateDialog from "@/dialogs/UpdateDialog.tsx";
 import {initClipboardWatcher} from "@/dialogs/AddModDialog/open.ts";
@@ -114,6 +115,7 @@ const AppContent = () => {
 
         initClipboardWatcher();
         initActivityLog().catch(console.error);
+        RepositoryUpdates.init().catch(console.error);
 
     }, []);
 

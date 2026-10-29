@@ -155,6 +155,13 @@ pub struct ModConflict {
     pub mod_id: i64,
     pub conflicting_mods: Vec<i64>,
     pub conflicting_files: Vec<String>,
+    /// Content fingerprint of each conflicting file in this mod (same value in two
+    /// mods = byte-identical file, so that overlap is harmless). Missing if unreadable.
+    #[serde(default)]
+    pub file_hashes: std::collections::HashMap<String, String>,
+    /// How many files the mod has in total (to tell when every one is overridden)
+    #[serde(default)]
+    pub total_files: usize,
 }
 
 #[cfg(test)]
@@ -190,6 +197,8 @@ mod tests {
             mod_id: 1,
             conflicting_mods: vec![2],
             conflicting_files: vec!["fsd/content/a.uasset".to_string()],
+            file_hashes: Default::default(),
+            total_files: 1,
         })
         .expect("mod conflict should serialize");
 

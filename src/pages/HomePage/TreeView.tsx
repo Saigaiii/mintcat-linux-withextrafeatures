@@ -1,3 +1,4 @@
+import {InstallOrder} from "@/services/ListDisplay";
 import React from "react";
 import {Tree, TreeProps} from 'antd';
 import type {CompleteModData} from "@/storage/dao/ModDAO";
@@ -273,7 +274,10 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
     @autoBind
     private onCustomTitleRender(nodeData: any) {
         const folders = this.getFolderList();
-        const itemOrder = nodeData.isLeaf ? this.getItemOrder(nodeData.key) : undefined;
+        // Global install position (top of the whole list = 1 = wins conflicts); per-folder number as fallback
+        const itemOrder = nodeData.isLeaf
+            ? (InstallOrder.position(nodeData.modId) ?? this.getItemOrder(nodeData.key))
+            : undefined;
         // 必须用 JSX 挂载子组件，不能 TreeViewItem(...) 函数调用，否则 Hooks 会在 antd Tree 内部 memo/effect 中执行，触发 “Do not call Hooks inside useEffect”
         return (
             <TreeViewItem
