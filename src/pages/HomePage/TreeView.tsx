@@ -42,6 +42,9 @@ interface TreeViewState {
 
 export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
     private folderItemOrderMap = new Map<string, number>();
+    /** treeData the folder list / per-folder numbers below were computed from */
+    private derivedFrom: unknown = null;
+    private folderListCache: FolderInfo[] = [];
 
     state: TreeViewState = {
         isDragging: false
@@ -64,6 +67,21 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
      * 从 treeData 中提取所有文件夹信息
      */
     private getFolderList(): FolderInfo[] {
+        // Called for every row; the list only changes with treeData (also keeps the array
+        // identity stable so memoized rows don't re-render)
+        this.refreshDerived();
+        return this.folderListCache;
+    }
+
+    /** Recompute the folder list and per-folder numbers when treeData changed */
+    private refreshDerived(): void {
+        if (this.derivedFrom === this.props.treeData) return;
+        this.derivedFrom = this.props.treeData;
+        this.folderListCache = this.collectFolderList();
+        this.buildFolderItemOrderMap();
+    }
+
+    private collectFolderList(): FolderInfo[] {
         const folders: FolderInfo[] = [];
         
         const collectFolders = (nodes: any[]) => {
@@ -301,7 +319,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
     }
 
     render() {
-        this.buildFolderItemOrderMap();
+        this.refreshDerived();
 
         return (
             <Tree

@@ -57,6 +57,10 @@ export function useSearchViewModel() {
         return viewModelRef.current?.loadInitial();
     }, []);
 
+    const resumeOrLoad = useCallback(() => {
+        return viewModelRef.current?.resumeOrLoad();
+    }, []);
+
     // 加载更多
     const loadMore = useCallback(() => {
         return viewModelRef.current?.loadMore();
@@ -117,6 +121,7 @@ export function useSearchViewModel() {
         search,
         searchImmediate,
         loadInitial,
+        resumeOrLoad,
         loadMore,
         refresh,
         reset,

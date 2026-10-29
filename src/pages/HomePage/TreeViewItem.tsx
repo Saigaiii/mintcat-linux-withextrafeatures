@@ -1089,8 +1089,15 @@ export interface TreeViewItemProps {
     itemOrder?: number;
 }
 
+/**
+ * The tree calls titleRender for every visible row whenever it re-renders (each scroll
+ * step, selection, right-click). Rows only depend on their own props and the stores they
+ * subscribe to, so skip re-rendering when the props are unchanged.
+ */
+export const TreeViewItem = React.memo(TreeViewItemInner);
+
 /** 必须用 JSX `<TreeViewItem />` 渲染，勿当作普通函数调用，否则会违反 Hooks 规则（见 TreeView titleRender）。 */
-export function TreeViewItem({
+function TreeViewItemInner({
     nodeData,
     onMenuClick,
     onCountLabelUpdate,

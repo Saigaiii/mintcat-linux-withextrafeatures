@@ -30,6 +30,7 @@ import {
 } from '@/apis/search';
 import {RepositoryManagerDialog} from '@/dialogs/RepositoryManagerDialog';
 import {addRepositoryMod} from '@/services/RepositoryModInstaller';
+import {getSearchViewModel} from './SearchViewModel';
 import type {ModRepository} from '@/apis/repositories';
 import {AddModType} from '@/dialogs/AddModDialog';
 import {openWindow} from '@/dialogs/AddModDialog/open';
@@ -69,6 +70,7 @@ export function SearchPage() {
         search,
         searchImmediate,
         loadInitial,
+        resumeOrLoad,
         loadMore,
         refresh,
         reset,
@@ -80,7 +82,8 @@ export function SearchPage() {
         refreshAvailableSources,
     } = useSearchViewModel();
 
-    const [searchValue, setSearchValue] = useState('');
+    // Reopened page: show the query the kept results belong to
+    const [searchValue, setSearchValue] = useState(() => getSearchViewModel().getState().query || '');
     const [windowContentHeight, setContainerHeight] = useState(window.innerHeight - 81);
     const logPanelOffset = useLogPanelOffset();
     const containerHeight = windowContentHeight - logPanelOffset;
@@ -91,12 +94,31 @@ export function SearchPage() {
         initializeSearchProviders();
         let cancelled = false;
         Promise.resolve(refreshAvailableSources()).then(() => {
-            if (!cancelled) loadInitial();
+            if (!cancelled) resumeOrLoad();
         });
         return () => {
             cancelled = true;
         };
-    }, [refreshAvailableSources, loadInitial]);
+    }, [refreshAvailableSources, resumeOrLoad]);
+
+    // Go back to where the result list was scrolled to (kept by onScroll below) when reopened.
+    // The cards render a moment after mounting, so retry for a few frames until it sticks.
+    useEffect(() => {
+        const saved = getSearchViewModel().scrollTop;
+        if (saved <= 0) return;
+        let frames = 0;
+        let handle = 0;
+        const restore = () => {
+            const el = containerRef.current;
+            if (!el) return;
+            el.scrollTop = saved;
+            if (Math.abs(el.scrollTop - saved) > 2 && ++frames < 30) {
+                handle = requestAnimationFrame(restore);
+            }
+        };
+        handle = requestAnimationFrame(restore);
+        return () => cancelAnimationFrame(handle);
+    }, []);
 
     // 监听窗口大小变化
     useEffect(() => {
@@ -281,6 +303,9 @@ export function SearchPage() {
         <div
             ref={containerRef}
             id="searchScrollableDiv"
+            onScroll={(e) => {
+                getSearchViewModel().scrollTop = e.currentTarget.scrollTop;
+            }}
             className="search-page-container"
             style={{height: containerHeight}}
         >

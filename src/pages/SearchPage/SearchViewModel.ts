@@ -71,6 +71,11 @@ export class SearchViewModel {
     private listeners: Set<(state: SearchState) => void> = new Set();
     private abortController: AbortController | null = null;
     private requestSequence = 0;
+    /** What the current results were loaded for, and when (to reuse them when the page reopens) */
+    private lastLoadKey = '';
+    private lastLoadedAt = 0;
+    /** Scroll position of the result list, restored when the page reopens */
+    public scrollTop = 0;
     private imageLoadingQueue: Map<string, Promise<string | undefined>> = new Map();
 
     constructor() {
@@ -230,6 +235,8 @@ export class SearchViewModel {
         this.cancelCurrentRequest();
         this.abortController = new AbortController();
         const requestId = ++this.requestSequence;
+        this.scrollTop = 0;
+        this.lastLoadKey = '';
 
         this.setState({
             loading: true,
@@ -267,6 +274,8 @@ export class SearchViewModel {
                 hasMore: result.hasMore,
                 loading: false,
             });
+            this.lastLoadKey = this.loadKey(query);
+            this.lastLoadedAt = Date.now();
 
             // 异步加载图片缓存
             this.loadImagesAsync(result.items);
@@ -285,6 +294,23 @@ export class SearchViewModel {
      */
     public async loadInitial(): Promise<void> {
         await this.search('');
+    }
+
+    private loadKey(query: string): string {
+        return JSON.stringify([this.state.currentSource, query, this.state.sortBy, this.state.sortOrder]);
+    }
+
+    /**
+     * When the page opens again: keep the results (and query/scroll) from last time if they
+     * are recent and still for the same source, instead of downloading page 1 again.
+     */
+    public async resumeOrLoad(maxAgeMs = 10 * 60 * 1000): Promise<void> {
+        const fresh = this.state.items.length > 0
+            && !this.state.error
+            && Date.now() - this.lastLoadedAt < maxAgeMs
+            && this.lastLoadKey === this.loadKey(this.state.query);
+        if (fresh) return;
+        await this.search(this.state.query || '');
     }
 
     /**

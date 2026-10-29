@@ -1,6 +1,7 @@
 import React from 'react';
 import {Layout} from 'antd';
 import {Route, Routes, useLocation, useNavigate} from 'react-router-dom';
+import {perfMark, perfUntilPainted} from '@/utils/perfTrace';
 import {useAppError} from '@/hooks/useAppError';
 import {useDeepLinkHandler} from '@/hooks/useDeepLinkHandler';
 import {useOAuthCallback} from '@/hooks/useOAuthCallback';
@@ -51,6 +52,7 @@ const AppContent = () => {
     const location = useLocation();
 
     const clickMenu = React.useCallback((key: string) => {
+        perfMark(`nav ${key}`);
         if (key === MenuPage.Home) {
             navigate('/home');
             return;
@@ -69,6 +71,11 @@ const AppContent = () => {
         }
         return MenuPage.Home;
     }, [location.pathname]);
+    React.useEffect(() => {
+        perfUntilPainted(`route ${location.pathname}`);
+    }, [location.pathname]);
+    // Every route that isn't one of the other pages shows the mod list
+    const isHomeRoute = !OTHER_PAGE_ROUTES.some((route) => location.pathname.startsWith(route));
 
     useAppError();
     useDeepLinkHandler(isAppViewModelReady);
@@ -173,13 +180,20 @@ const AppContent = () => {
                     )}
                     {initError == null && !isAppViewModelReady && <EmptyPage/>}
                     {initError == null && isAppViewModelReady && (
-                        <Routes>
-                            <Route path="/home" element={<HomePage/>}/>
-                            <Route path="/home/modio" element={<SearchPage/>}/>
-                            <Route path="/home/accelerator" element={<AcceleratorPage/>}/>
-                            <Route path="/home/setting" element={<SettingPage/>}/>
-                            <Route path="*" element={<HomePage/>}/>
-                        </Routes>
+                        <>
+                            {/* The mod list stays mounted while other pages are open: rebuilding it
+                                (database reads, ~200 rows) on every return made switching pages slow */}
+                            <div style={isHomeRoute ? undefined : {display: "none"}}>
+                                <HomePage active={isHomeRoute}/>
+                            </div>
+                            <Routes>
+                                <Route path="/home" element={null}/>
+                                <Route path="/home/modio" element={<SearchPage/>}/>
+                                <Route path="/home/accelerator" element={<AcceleratorPage/>}/>
+                                <Route path="/home/setting" element={<SettingPage/>}/>
+                                <Route path="*" element={null}/>
+                            </Routes>
+                        </>
                     )}
                 </Content>
             </Layout>
@@ -190,6 +204,9 @@ const AppContent = () => {
         </Layout>
     );
 };
+
+/** Routes with their own page; everything else shows the mod list */
+const OTHER_PAGE_ROUTES = ['/home/modio', '/home/accelerator', '/home/setting'];
 
 function App() {
     return (

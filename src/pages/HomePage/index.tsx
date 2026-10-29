@@ -1,6 +1,6 @@
 import {getCurrentWindow} from "@tauri-apps/api/window";
 import React from "react";
-import {t} from "i18next";
+import i18next, {t} from "i18next";
 import {open as openFileDialog, save} from "@tauri-apps/plugin-dialog";
 import {copyFile, exists} from "@tauri-apps/plugin-fs";
 import {
@@ -65,6 +65,7 @@ import { ConflictService } from "@/services/ConflictService";
 import { ConflictReport } from "@/components/ConflictDetails";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
 import { isUe4ssEnabled } from "@/utils/Ue4ssSetting";
+import { perfMark, perfUntilPainted } from "@/utils/perfTrace";
 import { fileNameOf, findMovedSiblings, localModPath, parentDir, relocateLocalMod } from "@/services/LocalModRelocation";
 
 
@@ -89,8 +90,19 @@ interface ModListPageState {
 }
 
 
+/** Everything the list is built from; equal strings mean the same rows */
+function treeSignature(profileId: number | undefined, root: ProfileTreeItem, profileMods: ProfileModData[], mods: CompleteModData[]): string {
+    try {
+        return JSON.stringify([i18next.language, profileId, root, profileMods, mods]);
+    } catch {
+        return String(Math.random());
+    }
+}
+
 export class HomePage extends BasePage<any, ModListPageState> {
     private lastFocusRecheck = 0;
+    /** Inputs of the last list build; an identical reload skips re-rendering ~200 rows */
+    private lastTreeSignature = "";
     private unlistenFocusRecheck?: () => void;
 
     private readonly profileEditDialogRef: React.RefObject<ProfileEditDialog> = React.createRef();
@@ -746,6 +758,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         profileMods: ProfileModData[],
         resetExpandedKeys: boolean = false
     ) {
+        this.lastTreeSignature = "";
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
         converter.convertToFromRoot(activeRoot);
@@ -833,6 +846,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
      */
     @autoBind
     private async updateTreeView(resetExpandedKeys: boolean = false) {
+        perfMark('home:tree-load');
         await IoC.get(TreeViewModel);
         const profileVM = await IoC.get(ProfileViewModel);
         const modsApi = await StorageAPI.getMods();
@@ -849,6 +863,15 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
         // Get profile-specific mod data (enabled status, used version)
         const profileMods = activeProfile ? await profilesApi.getProfileMods(activeProfile.id!) : [];
+
+        // Nothing changed since the list was last built: keep the rendered rows as they are
+        const signature = treeSignature(activeProfile?.id, activeRoot, profileMods, allMods);
+        if (!resetExpandedKeys && signature === this.lastTreeSignature && this.state.treeData?.length) {
+            perfMark('home:tree-unchanged');
+            await this.refreshUnsavedState();
+            return;
+        }
+        this.lastTreeSignature = signature;
 
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
@@ -882,7 +905,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         this.setState({
             treeData: converter.treeData,
             expandedKeys: newExpandedKeys,
-        });
+        }, () => perfUntilPainted('home:tree'));
         await this.refreshUnsavedState();
     }
 
@@ -1135,6 +1158,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
     }
 
     async componentDidMount(): Promise<void> {
+        perfMark('home:mount');
         // Wait for core to be ready
         if (!AppInitializer.isCoreReady()) {
             await AppInitializer.initializeCore();
@@ -1226,10 +1250,28 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // Check for mod updates
         ModUpdateService.checkModList((loading) => {
             this.setState({ loading });
-        }).then(() => {
+        }).then((changed) => {
             // The list may have loaded before this check finished; show its results
-            this.updateTreeView().catch(e => console.warn('[HomePage] refresh after file check failed', e));
+            if (changed > 0) {
+                this.updateTreeView().catch(e => console.warn('[HomePage] refresh after file check failed', e));
+            }
         });
+    }
+
+    componentDidUpdate(prevProps: Readonly<any>): void {
+        // Shown again after another page (the list stays mounted while hidden)
+        if (this.props.active && prevProps.active === false) {
+            perfUntilPainted('home:shown');
+            // Pick up anything changed elsewhere; skipped cheaply when nothing did
+            this.updateTreeView().catch(e => console.warn('[HomePage] refresh on show failed', e));
+            const now = Date.now();
+            if (now - this.lastFocusRecheck > 5000) {
+                this.lastFocusRecheck = now;
+                ModUpdateService.recheckLocalModFiles()
+                    .then(changed => (changed > 0 ? this.updateTreeView() : undefined))
+                    .catch(e => console.warn('[HomePage] local file re-check failed', e));
+            }
+        }
     }
 
     componentWillUnmount(): void {

@@ -984,11 +984,12 @@ export class ModUpdateService {
         const allCompleteMods = await modsApi.getAllCompleteModData();
 
         // 使用批量检查方法
-        await this.batchCheckLocalModCache(allCompleteMods);
+        const changed = await this.batchCheckLocalModCache(allCompleteMods);
 
         ModUpdateService.loading = false;
         onLoadingChange?.(false);
-        return true;
+        /** how many local mods changed between found and missing */
+        return changed;
     }
 
     /**
