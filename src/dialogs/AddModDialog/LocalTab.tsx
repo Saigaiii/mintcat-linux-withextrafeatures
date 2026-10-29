@@ -4,11 +4,12 @@ import {path} from "@tauri-apps/api";
 import {useEventListener} from "@/events";
 import {getCurrentWindow} from "@tauri-apps/api/window";
 import React, {useEffect, useState} from "react";
-import {Button, Flex, Form, Input, List, message} from "antd";
+import {Button, Flex, Form, Input, List, message, Tag, Tooltip} from "antd";
 import {t} from "i18next";
 import {CloseOutlined, FilePptOutlined, FileZipOutlined, FolderOutlined, FolderOpenOutlined, InboxOutlined} from "@ant-design/icons";
 import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
-import {parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
+import {isModArchivePath, parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
+import {logActivity} from "@/services/ActivityLog";
 
 
 interface FileItem {
@@ -16,6 +17,7 @@ interface FileItem {
     path: string;
     type: string;  // "folder" | ".pak" | ".zip"
     isUnpackedMod?: boolean;  // true if folder is a valid unpacked mod directory
+    missing?: boolean;  // nothing exists at this path (copied/pasted path to a moved or deleted file)
 }
 
 /**
@@ -65,14 +67,29 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
     }));
 
 
-    /** Returns true if the path is a usable mod (.pak/.zip/unpacked folder) */
-    const addFileList = async (filePath: string): Promise<boolean> => {
+    /**
+     * Add a path to the list.
+     * With allowMissing, a .pak/.zip path with nothing at it is still listed (marked "Not found")
+     * so you can see it; adding it later logs it as an error.
+     */
+    const addFileList = async (filePath: string, allowMissing = false): Promise<'added' | 'missing' | 'rejected'> => {
+        let present = false;
         try {
-            if (!(await exists(filePath))) {
-                return false;
-            }
+            present = await exists(filePath);
         } catch {
-            return false;
+            present = false;
+        }
+
+        if (!present) {
+            if (!allowMissing || !isModArchivePath(filePath)) {
+                return 'rejected';
+            }
+            const name = filePath.split(/[\\/]/).pop() || filePath;
+            const ext = (name.match(/\.(pak|zip)$/i)?.[0] || ".pak").toLowerCase();
+            setFileList(prevList => prevList.find(file => file.path === filePath)
+                ? prevList
+                : [...prevList, {path: filePath, name, type: ext, missing: true}]);
+            return 'missing';
         }
 
         const fileInfo = await stat(filePath);
@@ -82,12 +99,12 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
         if (fileInfo.isDirectory) {
             // For directories, only accept if it's a valid unpacked mod
             if (!fileItem.isUnpackedMod) {
-                return false;
+                return 'rejected';
             }
         } else {
             // For files, only accept .pak or .zip
             if (!/\.(zip|pak)$/i.test(filePath)) {
-                return false;
+                return 'rejected';
             }
         }
 
@@ -97,7 +114,7 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
             }
             return [...prevList, fileItem];
         });
-        return true;
+        return 'added';
     }
 
     /** Add every path in pasted text (plain paths, quoted paths or file:// URIs) */
@@ -109,11 +126,19 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
             homeDir = undefined;
         }
         let skipped = 0;
+        let missing = 0;
         for (const line of splitLines(text)) {
             const localPath = parseLocalPathLine(line, homeDir);
-            if (!localPath || !(await addFileList(localPath))) {
+            const result = localPath ? await addFileList(localPath, true) : 'rejected';
+            if (result === 'missing') {
+                missing++;
+            } else if (result === 'rejected') {
                 skipped++;
+                await logActivity('warning', t("localMods.lineSkipped"), line, 'add-mod');
             }
+        }
+        if (missing > 0) {
+            message.warning(t("localMods.someMissing", {count: missing}));
         }
         if (skipped > 0) {
             message.warning(t("localMods.someNotAdded", {count: skipped}));
@@ -145,8 +170,12 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
             return;
         }
         (async () => {
+            let missing = 0;
             for (const p of paths) {
-                await addFileList(p);
+                if (await addFileList(p, true) === 'missing') missing++;
+            }
+            if (missing > 0) {
+                message.warning(t("localMods.someMissing", {count: missing}));
             }
         })();
     }, [paths, revision]);
@@ -268,9 +297,14 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
                                               ) :
                                               item.type === ".pak" ? <FilePptOutlined/> : <FileZipOutlined/>
                                           }
-                                          <span>
+                                          <span style={item.missing ? {color: '#ff4d4f'} : undefined}>
                                               {item.name}
                                               {item.isUnpackedMod && <span style={{color: '#52c41a', marginLeft: 8, fontSize: 12}}>(Unpacked)</span>}
+                                              {item.missing &&
+                                                  <Tooltip title={<span>{t("localMods.notFoundHint")}<br/>
+                                                      <span style={{fontFamily: "monospace", fontSize: 12, wordBreak: "break-all"}}>{item.path}</span></span>}>
+                                                      <Tag color="red" style={{marginLeft: 8}}>{t("localMods.notFound")}</Tag>
+                                                  </Tooltip>}
                                           </span>
                                       </Flex>
                                       <Button variant={"text"}

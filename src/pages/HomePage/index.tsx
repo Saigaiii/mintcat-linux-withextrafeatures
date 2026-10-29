@@ -1,3 +1,4 @@
+import {getCurrentWindow} from "@tauri-apps/api/window";
 import React from "react";
 import {t} from "i18next";
 import {save} from "@tauri-apps/plugin-dialog";
@@ -82,6 +83,8 @@ interface ModListPageState {
 
 
 export class HomePage extends BasePage<any, ModListPageState> {
+    private lastFocusRecheck = 0;
+    private unlistenFocusRecheck?: () => void;
 
     private readonly profileEditDialogRef: React.RefObject<ProfileEditDialog> = React.createRef();
 
@@ -1029,6 +1032,18 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
         // Setup window resize hook
         this.hookWindowResized();
+        this.hookLogPanel();
+
+        // Re-check local mod files when coming back to the window (they may have been moved/deleted)
+        getCurrentWindow().onFocusChanged(({payload: focused}) => {
+            const now = Date.now();
+            if (focused && now - this.lastFocusRecheck > 5000) {
+                this.lastFocusRecheck = now;
+                ModUpdateService.recheckLocalModFiles().catch(e => console.warn('[HomePage] local file re-check failed', e));
+            }
+        }).then(unlisten => {
+            this.unlistenFocusRecheck = unlisten;
+        }).catch(() => undefined);
 
         // Setup event listeners
         // 监听单个 mod 启用/禁用切换事件
@@ -1092,6 +1107,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
     }
 
     componentWillUnmount(): void {
+        this.unhookLogPanel();
+        this.unlistenFocusRecheck?.();
         // ✅ 清理所有事件监听器
         if (this.unlistenActiveGameChange) {
             this.unlistenActiveGameChange();
@@ -1245,7 +1262,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                             </Typography.Link>
                         </Space>
                         <div style={{
-                            height: window.innerHeight - 145,
+                            height: window.innerHeight - 145 - this.logPanelOffset,
                             overflow: "hidden",
                             position: "relative",
                         }}>
@@ -1256,7 +1273,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                 selectedKeys={this.state.selectedKeys}
                                 checkedKeys={this.state.checkedKeys}
                                 virtual={this.state.virtual}
-                                height={window.innerHeight - 145}
+                                height={window.innerHeight - 145 - this.logPanelOffset}
                                 onMenuClick={this.onMenuClick}
                                 onUpdateTreeView={this.updateTreeView}
                                 onCountLabelUpdate={this.updateCountLabel}

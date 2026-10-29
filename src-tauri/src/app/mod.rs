@@ -133,6 +133,7 @@ pub fn run() {
             download::cancel_download,
             network::set_network_proxy,
             network::fetch_update_manifest,
+            network::fetch_repository_json,
             control_plane::control_plane_invoke,
             hot_update::get_control_plane_status,
             hot_update::get_hot_update_store_manifest,

@@ -274,7 +274,7 @@ export class HomeService {
                 await this.addModDependencies(existingModByName.platformId, groupId, profile.id!);
             }
 
-            return { status: "added" };
+            return { status: "added", modName: existingModByName.displayName };
         }
 
         // 数据库中不存在，才调用网络 API 获取 mod 信息
@@ -302,7 +302,7 @@ export class HomeService {
                 await this.addModDependencies(modInfoResp.id, groupId, profile.id!);
             }
 
-            return { status: "added" };
+            return { status: "added", modName: modInfoResp.name };
         }
 
         // 仅写入元数据到列表，不下载；安装时再下载
@@ -312,7 +312,7 @@ export class HomeService {
             await this.addModDependencies(modInfoResp.id, groupId, profile.id!);
         }
 
-        return { status: "added" };
+        return { status: "added", modName: modInfoResp.name };
     }
 
     /**

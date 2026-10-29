@@ -4,6 +4,10 @@ import {
     SearchSource,
     SearchProviderRegistry,
     ISearchProvider,
+    RepositorySearchProvider,
+    isRepositorySource,
+    syncRepositoryProviders,
+    type SearchSourceKey,
 } from '@/apis/search';
 import {CacheApi} from '@/apis/CacheApi';
 import {TranslateApi} from '@/apis/TranslateApi';
@@ -30,9 +34,9 @@ export interface SearchState {
     /** 每页数量 */
     pageSize: number;
     /** 当前搜索源 */
-    currentSource: SearchSource;
+    currentSource: SearchSourceKey;
     /** 可用的搜索源列表 */
-    availableSources: SearchSource[];
+    availableSources: SearchSourceKey[];
     /** 排序字段 */
     sortBy: SearchSortBy;
     /** 排序方向 */
@@ -109,18 +113,27 @@ export class SearchViewModel {
     /**
      * 根据当前游戏得到可用搜索源：DRG 支持 mod.io + ModCat + Nexus Mods，RC 支持 ModCat + Nexus 跳转入口
      */
-    private async getAvailableSourcesForCurrentGame(): Promise<SearchSource[]> {
+    private async getAvailableSourcesForCurrentGame(): Promise<SearchSourceKey[]> {
+        await syncRepositoryProviders().catch((e) => console.warn('[SearchViewModel] repositories', e));
         const registry = SearchProviderRegistry.getInstance();
         const allSources = registry.getSources();
         const gameDAO = await StorageAPI.getGames();
         const activeGame = await gameDAO.getActiveGame();
         const gameName = activeGame?.name?.toLowerCase();
 
+        // User-added repositories for this game go after the built-in sources
+        const repoSources = allSources.filter((s) => {
+            if (!isRepositorySource(s)) return false;
+            const provider = registry.get(s);
+            const repoGame = provider instanceof RepositorySearchProvider ? provider.repository.game : 'drg';
+            return !gameName || repoGame === gameName;
+        });
+
         if (gameName === 'rc') {
-            return [SearchSource.NEXUSMODS, SearchSource.MODCAT].filter((s) => allSources.includes(s));
+            return [...[SearchSource.NEXUSMODS, SearchSource.MODCAT].filter((s) => allSources.includes(s)), ...repoSources];
         }
         if (gameName === 'drg') {
-            return allSources.filter((s) => s === SearchSource.MODIO || s === SearchSource.MODCAT || s === SearchSource.NEXUSMODS);
+            return [...allSources.filter((s) => s === SearchSource.MODIO || s === SearchSource.MODCAT || s === SearchSource.NEXUSMODS), ...repoSources];
         }
         return allSources;
     }
@@ -190,7 +203,7 @@ export class SearchViewModel {
     /**
      * 切换搜索源
      */
-    public async switchSource(source: SearchSource): Promise<void> {
+    public async switchSource(source: SearchSourceKey): Promise<void> {
         if (source === this.state.currentSource) return;
 
         this.cancelCurrentRequest();

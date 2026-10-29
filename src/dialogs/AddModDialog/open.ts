@@ -17,11 +17,11 @@ import {message} from "antd";
 import {frontendRouteUrl} from "@/utils/FrontendUpdateRuntime.ts";
 import {ModUpdateService} from "@/services/ModUpdateService.ts";
 import type {AddModFromUrlResult} from "@/services/HomeService.ts";
-import type {AddModFromPathResult} from "@/services/HomeService.ts";
 import {exists} from "@tauri-apps/plugin-fs";
 import {path as tauriPath} from "@tauri-apps/api";
 import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
 import {isModArchivePath, parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
+import {ActivityLog, logActivity} from "@/services/ActivityLog";
 
 let windowInstance: WebviewWindow;
 
@@ -82,6 +82,9 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
     await onceEvent('add-mod-dialog-ok', async (result) => {
         // result.list 去重
         result.list = [...new Set(result.list)];
+        let addProblems = 0;
+        let addExists = 0;
+        let addTotal = 0;
 
         switch (result.addModType) {
             case AddModType.SUBSCRIBED: {
@@ -104,26 +107,33 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
                 const onlineList = [...new Set(result.onlineList
                     ?? (result.addModType === AddModType.ONLINE ? result.list : []))];
 
+                const outcomes: AddOutcome[] = [];
                 if (localList.length > 0) {
-                    const pathResults: AddModFromPathResult[] = [];
-                    for (const item of localList) {
-                        pathResults.push(await vm.addModFromPath(item, result.groupId));
-                    }
-                    const existsCount = pathResults.filter((r) => r.status === "exists").length;
-                    if (existsCount > 0) {
-                        message.warning(t("Mod Already Exists") + ` (${existsCount} ${t("in current list")})`);
-                    }
+                    outcomes.push(await addLocalMods(vm, localList, result.groupId));
                 }
                 if (onlineList.length > 0) {
-                    await addOnlineMods(vm, onlineList, result.groupId);
+                    outcomes.push(await addOnlineMods(vm, onlineList, result.groupId));
                 }
+                addProblems = outcomes.reduce((n, o) => n + o.problems, 0);
+                addExists = outcomes.reduce((n, o) => n + o.exists, 0);
+                addTotal = localList.length + onlineList.length;
             }
                 break;
             default:
                 break;
         }
 
-        await StatusBar.success(t("Add Complete"));
+        if (addProblems > 0) {
+            // Say how many failed and show the Log with the exact links/files
+            message.error(t("addMod.someFailed", {count: addProblems, total: addTotal}));
+            ActivityLog.setOpen(true);
+            await StatusBar.warning(t("addMod.finishedWithProblems", {count: addProblems}));
+        } else {
+            await StatusBar.success(t("Add Complete"));
+        }
+        if (addExists > 0) {
+            message.warning(t("Mod Already Exists") + ` (${addExists} ${t("in current list")})`);
+        }
         await emitVoidEvent('mods-added');
         if (onUpdated) {
             await onUpdated();
@@ -140,9 +150,77 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
 
 }
 
+type AddOutcome = { problems: number; exists: number };
+
 type NexusModsParsedUrl = NonNullable<ReturnType<typeof NexusModsApi.parseModLinks>>;
 
-async function addOnlineMods(vm: HomeViewModel, list: string[], groupId: number): Promise<void> {
+function errorText(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === 'string') return error;
+    try {
+        return JSON.stringify(error);
+    } catch {
+        return String(error);
+    }
+}
+
+function fileNameOf(p: string): string {
+    const parts = p.split(/[\\/]/);
+    return parts[parts.length - 1] || p;
+}
+
+/**
+ * Add local files one by one, logging each outcome.
+ * @returns how many could not be added / were already listed
+ */
+async function addLocalMods(vm: HomeViewModel, list: string[], groupId: number): Promise<AddOutcome> {
+    let problems = 0;
+    let exists = 0;
+    for (const item of list) {
+        try {
+            const r = await vm.addModFromPath(item, groupId);
+            if (r.status === "added") {
+                await logActivity('success', t("addMod.log.added", {name: fileNameOf(item)}), item, 'add-mod');
+            } else if (r.status === "exists") {
+                exists++;
+                await logActivity('info', t("addMod.log.alreadyInList", {name: fileNameOf(item)}), item, 'add-mod');
+            } else {
+                problems++;
+                await logActivity('error', t("addMod.log.fileNotFound"), item, 'add-mod');
+            }
+        } catch (error) {
+            problems++;
+            console.error('[AddModDialog] Failed to add local mod:', item, error);
+            await logActivity('error', t("addMod.log.failed", {reason: errorText(error)}), item, 'add-mod');
+        }
+    }
+    return {problems, exists};
+}
+
+async function logLinkResult(url: string, r: AddModFromUrlResult | undefined): Promise<'added' | 'exists' | 'problem'> {
+    const name = r?.modName || r?.mod?.displayName;
+    if (r?.status === "added") {
+        await logActivity('success', t("addMod.log.added", {name: name || url}), url, 'add-mod');
+        return 'added';
+    }
+    if (r?.status === "exists") {
+        await logActivity('info', t("addMod.log.alreadyInList", {name: name || url}), url, 'add-mod');
+        return 'exists';
+    }
+    // "invalid": the link isn't a mod link we understand, or no mod exists at it
+    if (!isModLink(url)) {
+        await logActivity('error', t("addMod.log.notAModLink"), url, 'add-mod');
+    } else {
+        await logActivity('error', t("addMod.log.modNotFound"), url, 'add-mod');
+    }
+    return 'problem';
+}
+
+/**
+ * Add links, logging each outcome (added mod's name, already listed, not found, error).
+ * @returns how many could not be added / were already listed
+ */
+async function addOnlineMods(vm: HomeViewModel, list: string[], groupId: number): Promise<AddOutcome> {
     const directAddList: string[] = [];
     const nexusWebviewList: Array<{ url: string; parsed: NexusModsParsedUrl }> = [];
 
@@ -156,38 +234,47 @@ async function addOnlineMods(vm: HomeViewModel, list: string[], groupId: number)
     }
 
     const results: AddModFromUrlResult[] = [];
-    let errorCount = 0;
+    let problems = 0;
+    let exists = 0;
+    const count = (outcome: 'added' | 'exists' | 'problem') => {
+        if (outcome === 'problem') problems++;
+        if (outcome === 'exists') exists++;
+    };
 
     if (directAddList.length > 0) {
         const directResult = await asyncPoolAll(
             directAddList,
-            (item) => vm.addModFromUrl(item, groupId),
+            async (item) => {
+                try {
+                    const r = await vm.addModFromUrl(item, groupId);
+                    count(await logLinkResult(item, r));
+                    return r;
+                } catch (error) {
+                    problems++;
+                    await logActivity('error', t("addMod.log.failed", {reason: errorText(error)}), item, 'add-mod');
+                    throw error;
+                }
+            },
             5
         );
         results.push(...directResult.results.filter(Boolean));
-        errorCount += directResult.errors.length;
     }
 
     for (const item of nexusWebviewList) {
         try {
             const addModUrl = await captureNexusDownloadUrl(item.url, { parsed: item.parsed });
-            results.push(await vm.addModFromUrl(addModUrl, groupId));
+            const r = await vm.addModFromUrl(addModUrl, groupId);
+            count(await logLinkResult(item.url, r));
+            results.push(r);
         } catch (error) {
-            errorCount++;
+            problems++;
             console.error('[AddModDialog] Failed to capture Nexus Mods download URL:', error);
-            message.error(error instanceof Error ? error.message : t('nexusmods.resolveNxmFailed'));
+            await logActivity('error', t("addMod.log.failed", {reason: errorText(error)}), item.url, 'add-mod');
         }
     }
 
-    const existsCount = results.filter((r) => r?.status === "exists").length;
-    if (existsCount > 0) {
-        message.warning(t("Mod Already Exists") + ` (${existsCount} ${t("in current list")})`);
-    }
-    if (errorCount > 0) {
-        message.warning(t("mod.someFailedToAdd") + `: ${errorCount}/${list.length}`);
-    }
-
     await downloadNexusModsAfterAdd(results);
+    return {problems, exists};
 }
 
 async function downloadNexusModsAfterAdd(results: AddModFromUrlResult[]): Promise<void> {
@@ -263,14 +350,15 @@ async function onClipboardChange(text: string) {
             || normalized.includes("/roguecore/content/paks/")) {
             return;
         }
+        let present = false;
         try {
-            if (!(await exists(localPath))) {
-                return;
-            }
+            present = await exists(localPath);
         } catch {
-            return;
+            present = false;
         }
-        if (!isModArchivePath(localPath) && !(await isUnpackedModDir(localPath))) {
+        // A .pak/.zip path is taken even when nothing is there, so the dialog can show it as "Not found";
+        // a folder must be an existing unpacked mod (otherwise this is unrelated clipboard text)
+        if (!isModArchivePath(localPath) && !(present && await isUnpackedModDir(localPath))) {
             return;
         }
         paths.push(localPath);

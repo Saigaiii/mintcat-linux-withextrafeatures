@@ -1,6 +1,6 @@
 import {useState, useEffect, useCallback, useRef} from 'react';
 import {SearchViewModel, SearchState, SearchSortBy, SearchSortOrder, getSearchViewModel} from './SearchViewModel';
-import {SearchSource} from '@/apis/search';
+import {type SearchSourceKey} from '@/apis/search';
 
 /**
  * 自定义 Hook：使用 SearchViewModel
@@ -73,7 +73,7 @@ export function useSearchViewModel() {
     }, []);
 
     // 切换搜索源
-    const switchSource = useCallback((source: SearchSource) => {
+    const switchSource = useCallback((source: SearchSourceKey) => {
         return viewModelRef.current?.switchSource(source);
     }, []);
 

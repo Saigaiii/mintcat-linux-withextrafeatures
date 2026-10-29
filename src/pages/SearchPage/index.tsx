@@ -1,3 +1,4 @@
+import {useLogPanelOffset} from "@/components/LogPanel";
 import React, {useEffect, useCallback, useState, useMemo, useRef} from 'react';
 import {
     Button,
@@ -16,7 +17,19 @@ import {getCurrentWindow} from '@tauri-apps/api/window';
 import {SearchResultCard} from './SearchResultCard';
 import {useSearchViewModel} from './useSearchViewModel';
 import type {SearchSortBy, SearchSortOrder} from './SearchViewModel';
-import {SearchSource, initializeSearchProviders, type SearchResultItem} from '@/apis/search';
+import {
+    SearchSource,
+    SearchProviderRegistry,
+    initializeSearchProviders,
+    isRepositorySource,
+    syncRepositoryProviders,
+    repositorySourceKey,
+    type SearchResultItem,
+    type SearchSourceKey,
+} from '@/apis/search';
+import {RepositoryManagerDialog} from '@/dialogs/RepositoryManagerDialog';
+import {addRepositoryMod} from '@/services/RepositoryModInstaller';
+import type {ModRepository} from '@/apis/repositories';
 import {AddModType} from '@/dialogs/AddModDialog';
 import {openWindow} from '@/dialogs/AddModDialog/open';
 import {NexusModsApi} from '@/apis/nexusmods';
@@ -31,6 +44,9 @@ const MODIO_SORT_OPTIONS: { value: string; sortBy: SearchSortBy; sortOrder: Sear
     { value: 'name_asc', sortBy: 'name', sortOrder: 'asc' },
     { value: 'name_desc', sortBy: 'name', sortOrder: 'desc' },
 ];
+
+/** Dropdown entry that opens the repository manager instead of switching source */
+const MANAGE_REPOSITORIES = '__manage_repositories__';
 
 // 搜索源显示名称映射
 const sourceDisplayNames: Record<SearchSource, string> = {
@@ -64,7 +80,9 @@ export function SearchPage() {
     } = useSearchViewModel();
 
     const [searchValue, setSearchValue] = useState('');
-    const [containerHeight, setContainerHeight] = useState(window.innerHeight - 81);
+    const [windowContentHeight, setContainerHeight] = useState(window.innerHeight - 81);
+    const logPanelOffset = useLogPanelOffset();
+    const containerHeight = windowContentHeight - logPanelOffset;
     const containerRef = useRef<HTMLDivElement>(null);
 
     // 初始化搜索提供者，并按当前游戏刷新可用源后再做首次加载（避免 RC 时仍用 mod.io）
@@ -134,13 +152,29 @@ export function SearchPage() {
         await refresh();
     }, [refresh]);
 
+    const [repoDialogOpen, setRepoDialogOpen] = useState(false);
+
     // 处理搜索源切换
     const handleSourceChange = useCallback(
-        (value: SearchSource) => {
+        (value: SearchSourceKey | typeof MANAGE_REPOSITORIES) => {
+            if (value === MANAGE_REPOSITORIES) {
+                setRepoDialogOpen(true);
+                return;
+            }
             switchSource(value);
         },
         [switchSource]
     );
+
+    // Repositories added/removed: refresh the source list (and jump to a newly added one)
+    const handleRepositoriesChanged = useCallback(async (added?: ModRepository) => {
+        await syncRepositoryProviders();
+        await refreshAvailableSources();
+        if (added) {
+            setRepoDialogOpen(false);
+            await switchSource(repositorySourceKey(added));
+        }
+    }, [refreshAvailableSources, switchSource]);
 
     // 处理 mod.io 排序变更
     const handleSortChange = useCallback(
@@ -154,6 +188,10 @@ export function SearchPage() {
     // 处理添加 mod
     const handleAdd = useCallback(async (item: SearchResultItem) => {
         try {
+            if (isRepositorySource(item.source)) {
+                await addRepositoryMod(item);
+                return;
+            }
             if (item.source === SearchSource.NEXUSMODS) {
                 const parsed = NexusModsApi.parseModLinks(item.profileUrl);
                 if (!parsed) {
@@ -190,10 +228,15 @@ export function SearchPage() {
 
     // 搜索源选项（用于下拉框）
     const sourceOptions = useMemo(() => {
-        return (state?.availableSources || [SearchSource.MODIO]).map((source) => ({
+        const registry = SearchProviderRegistry.getInstance();
+        const options: { value: string; label: string }[] = (state?.availableSources || [SearchSource.MODIO]).map((source) => ({
             value: source,
-            label: sourceDisplayNames[source] || source,
+            label: isRepositorySource(source)
+                ? (registry.get(source)?.displayName || source)
+                : (sourceDisplayNames[source as SearchSource] || source),
         }));
+        options.push({value: MANAGE_REPOSITORIES, label: t('repo.manageOption')});
+        return options;
     }, [state?.availableSources]);
 
     // 搜索占位符
@@ -226,6 +269,10 @@ export function SearchPage() {
     );
 
     return (
+        <>
+        <RepositoryManagerDialog open={repoDialogOpen}
+                                 onClose={() => setRepoDialogOpen(false)}
+                                 onChanged={handleRepositoriesChanged}/>
         <div
             ref={containerRef}
             id="searchScrollableDiv"
@@ -244,15 +291,14 @@ export function SearchPage() {
                     />
 
                     {/* 网站选择下拉框 */}
-                    {sourceOptions.length > 1 && (
-                        <Select
-                            value={state?.currentSource}
-                            options={sourceOptions}
-                            onChange={handleSourceChange}
-                            disabled={isLoading}
-                            style={{width: 110}}
-                        />
-                    )}
+                    <Select
+                        value={state?.currentSource}
+                        options={sourceOptions}
+                        onChange={handleSourceChange}
+                        disabled={isLoading}
+                        style={{width: 140}}
+                        popupMatchSelectWidth={false}
+                    />
 
                     {/* mod.io 排序（仅当前源为 mod.io 时显示） */}
                     {state?.currentSource === SearchSource.MODIO && (
@@ -345,6 +391,7 @@ export function SearchPage() {
                 {isLoading && items.length === 0 && isInitialized && renderSkeleton()}
             </Flex>
         </div>
+        </>
     );
 }
 

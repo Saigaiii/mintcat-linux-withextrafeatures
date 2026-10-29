@@ -1,3 +1,4 @@
+import {logActivity} from "@/services/ActivityLog";
 import { t } from "i18next";
 import { exists, stat, remove } from "@tauri-apps/plugin-fs";
 import { emitEvent } from "@/events";
@@ -25,6 +26,9 @@ import { asyncPoolAll } from "@/utils/AsyncPool";
  * - 检查本地模组缓存
  * - 检查本地模组修改
  */
+/** Local mods whose missing file was already logged this session */
+const reportedMissingModIds = new Set<number>();
+
 export class ModUpdateService {
 
     private static loading = false;
@@ -853,6 +857,8 @@ export class ModUpdateService {
     public static async batchCheckLocalModCache(allMods: CompleteModData[]): Promise<void> {
         const localMods = allMods.filter(m => m.sourceType === ModSourceType.Local);
         if (localMods.length === 0) return;
+        const missingFound: CompleteModData[] = [];
+        const backAgain: CompleteModData[] = [];
 
         const modsApi = await StorageAPI.getMods();
         const updatePromises: Promise<void>[] = [];
@@ -864,6 +870,14 @@ export class ModUpdateService {
             updatePromises.push((async () => {
                 const fileExists = await exists(cachePath);
                 const currentNotFound = modItem.status?.isLocalNotFound ?? false;
+                // Log each missing file once per session, and when it comes back
+                if (!fileExists && !reportedMissingModIds.has(modItem.modId!)) {
+                    reportedMissingModIds.add(modItem.modId!);
+                    missingFound.push(modItem);
+                } else if (fileExists && reportedMissingModIds.has(modItem.modId!)) {
+                    reportedMissingModIds.delete(modItem.modId!);
+                    backAgain.push(modItem);
+                }
                 
                 // 只有状态变化时才更新数据库和发送事件
                 if (fileExists === currentNotFound) {
@@ -891,6 +905,23 @@ export class ModUpdateService {
 
         // 并行执行所有检查
         await Promise.all(updatePromises);
+
+        for (const mod of missingFound) {
+            await logActivity('warning', t("mod.log.fileMissing", {name: mod.displayName || mod.originalName || ''}),
+                mod.download?.cachePath || mod.url, 'files');
+        }
+        for (const mod of backAgain) {
+            await logActivity('info', t("mod.log.fileBack", {name: mod.displayName || mod.originalName || ''}),
+                mod.download?.cachePath || mod.url, 'files');
+        }
+    }
+
+    /**
+     * Re-check local mod files (e.g. when the window regains focus after files were moved)
+     */
+    public static async recheckLocalModFiles(): Promise<void> {
+        const modsApi = await StorageAPI.getMods();
+        await this.batchCheckLocalModCache(await modsApi.getAllCompleteModData());
     }
 
     /**

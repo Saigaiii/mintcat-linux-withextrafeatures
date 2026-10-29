@@ -12,6 +12,11 @@ export class SettingPage extends BasePage<any, any> {
 
     componentDidMount(): void {
         this.hookWindowResized();
+        this.hookLogPanel();
+    }
+
+    componentWillUnmount(): void {
+        this.unhookLogPanel();
     }
 
     render() {
@@ -19,7 +24,7 @@ export class SettingPage extends BasePage<any, any> {
             <div
                 id="scrollableDiv"
                 className="scrollable-div"
-                style={{ height: window.innerHeight - 81 }}>
+                style={{ height: window.innerHeight - 81 - this.logPanelOffset }}>
                 <MintCatSettings/>
                 <NetworkSettings/>
                 <CloudBackupSettings/>

@@ -1,6 +1,7 @@
 import {t} from "i18next";
 import React, {useState} from "react";
 import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
+import {CloseCircleFilled} from "@ant-design/icons";
 import {
     ClockCircleOutlined,
     DeleteOutlined,
@@ -659,7 +660,9 @@ function ModTreeViewWarring({nodeData}) {
     }
 
     const checkLocalNoFound = () => {
-        return nodeDataRef.current.localNoFound === true;
+        const data = nodeDataRef.current;
+        // Tree nodes carry `localNoFound`; live updates carry full mod data with `status.isLocalNotFound`
+        return data.localNoFound === true || data.status?.isLocalNotFound === true;
     }
 
     const checkOnlineUnavailable = () => {
@@ -793,9 +796,17 @@ function ModTreeViewWarring({nodeData}) {
 
             {
                 isLocalNoFound &&
-                <Tooltip title={t("File Not Found")}>
+                <Tooltip title={
+                    <span>
+                        {t("mod.localFileMissing")}
+                        <br/>
+                        <span style={{fontFamily: "monospace", fontSize: 12, wordBreak: "break-all"}}>
+                            {nodeDataRef.current.url || nodeDataRef.current.download?.cachePath || nodeData.url}
+                        </span>
+                    </span>
+                }>
                                 <span className="text-red mr-4">
-                                    <ExclamationCircleOutlined/>
+                                    <CloseCircleFilled/>
                                 </span>
                 </Tooltip>
             }

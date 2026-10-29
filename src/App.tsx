@@ -7,6 +7,8 @@ import {useOAuthCallback} from '@/hooks/useOAuthCallback';
 
 import TitleBar from "@/components/TitleBar.tsx";
 import StatusBar from "@/components/StatusBar.tsx";
+import LogPanel from "@/components/LogPanel";
+import {initActivityLog} from "@/services/ActivityLog";
 import MenuBar, {MenuPage} from "@/components/MenuBar.tsx";
 import UpdateDialog from "@/dialogs/UpdateDialog.tsx";
 import {initClipboardWatcher} from "@/dialogs/AddModDialog/open.ts";
@@ -111,6 +113,7 @@ const AppContent = () => {
             });
 
         initClipboardWatcher();
+        initActivityLog().catch(console.error);
 
     }, []);
 
@@ -178,6 +181,7 @@ const AppContent = () => {
                     )}
                 </Content>
             </Layout>
+            <LogPanel/>
             <Footer className="app-footer" style={{height: "30px", position: "relative", zIndex: 5}}>
                 <StatusBar/>
             </Footer>

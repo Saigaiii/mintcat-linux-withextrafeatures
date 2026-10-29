@@ -40,6 +40,9 @@ export interface EventPayloads {
   /** 状态栏日志消息 */
   'status-bar-log': string | { message: string; level?: 'info' | 'success' | 'warning' | 'error' };
 
+  /** Entry for the bottom Log panel (from any window) */
+  'activity-log': { level: 'info' | 'success' | 'warning' | 'error'; message: string; detail?: string; source?: string };
+
   /** 状态栏进度百分比 (0-100) */
   'status-bar-percent': number;
 

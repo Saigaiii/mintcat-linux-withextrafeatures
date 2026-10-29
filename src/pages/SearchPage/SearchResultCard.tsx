@@ -1,10 +1,10 @@
 import React, {memo, useCallback, useState} from 'react';
 import {Avatar, Button, Dropdown, Space, Skeleton} from 'antd';
-import {DownloadOutlined, LikeOutlined, PlusCircleOutlined, StarFilled, UserOutlined} from '@ant-design/icons';
+import {CalendarOutlined, DownloadOutlined, FileOutlined, LikeOutlined, PlusCircleOutlined, StarFilled, UserOutlined} from '@ant-design/icons';
 import {t} from 'i18next';
 import {open} from '@tauri-apps/plugin-shell';
 import type {MenuProps} from 'antd';
-import {SearchResultItem} from '@/apis/search';
+import {SearchResultItem, isRepositorySource, type RepositoryResultData} from '@/apis/search';
 
 interface SearchResultCardProps {
     item: SearchResultItem;
@@ -67,6 +67,12 @@ export const SearchResultCard = memo<SearchResultCardProps>(({
     // 显示的名称和摘要
     const displayName = item.nameTrans || item.name;
     const displaySummary = item.summaryTrans || item.summary;
+    // User-added repositories have no images or download counts
+    const isRepo = isRepositorySource(item.source);
+    const repoData = isRepo ? item.rawData as RepositoryResultData | undefined : undefined;
+    const repoDate = repoData?.postedAt && Number.isFinite(Date.parse(repoData.postedAt))
+        ? new Date(repoData.postedAt).toLocaleDateString()
+        : '';
 
     return (
         <Dropdown
@@ -79,7 +85,8 @@ export const SearchResultCard = memo<SearchResultCardProps>(({
             <div className="search-result-card">
                 <div className="search-result-card-content">
                     <div className="search-result-card-avatar">
-                        {(!displayAvatar || !avatarLoaded) && (
+                        {isRepo && <Avatar size={48} icon={<FileOutlined/>}/>}
+                        {!isRepo && (!displayAvatar || !avatarLoaded) && (
                             <Skeleton.Avatar active size={48} />
                         )}
                         {displayAvatar && (
@@ -128,12 +135,27 @@ export const SearchResultCard = memo<SearchResultCardProps>(({
 
                         <div className="search-result-card-stats">
                             <Space size="middle">
-                                <span className="search-result-card-stat">
-                                    <DownloadOutlined /> {formatNumber(item.stats.downloads)}
-                                </span>
-                                <span className="search-result-card-stat">
-                                    <LikeOutlined /> {formatNumber(item.stats.subscribers)}
-                                </span>
+                                {isRepo ? (
+                                    <>
+                                        <span className="search-result-card-stat">
+                                            <FileOutlined /> {t('repo.fileCount', {count: repoData?.fileCount ?? 0})}
+                                        </span>
+                                        {repoDate && (
+                                            <span className="search-result-card-stat">
+                                                <CalendarOutlined /> {repoDate}
+                                            </span>
+                                        )}
+                                    </>
+                                ) : (
+                                    <>
+                                        <span className="search-result-card-stat">
+                                            <DownloadOutlined /> {formatNumber(item.stats.downloads)}
+                                        </span>
+                                        <span className="search-result-card-stat">
+                                            <LikeOutlined /> {formatNumber(item.stats.subscribers)}
+                                        </span>
+                                    </>
+                                )}
                                 {item.stats.rating != null && item.stats.rating > 0 && (
                                     <span className="search-result-card-stat search-result-card-rating">
                                         <StarFilled /> {formatRating(item.stats.rating)}
@@ -148,7 +170,7 @@ export const SearchResultCard = memo<SearchResultCardProps>(({
                         </div>
                     </div>
 
-                    <div className="search-result-card-thumbnail">
+                    {!isRepo && <div className="search-result-card-thumbnail">
                         {(!displayThumbnail || !imageLoaded) && (
                             <Skeleton.Image
                                 active
@@ -177,7 +199,7 @@ export const SearchResultCard = memo<SearchResultCardProps>(({
                                 }}
                             />
                         )}
-                    </div>
+                    </div>}
                 </div>
             </div>
         </Dropdown>
