@@ -19,16 +19,20 @@ fn get_pak_files(pak_path: &str) -> anyhow::Result<Vec<String>> {
         .files()
         .iter()
         .map(|p| {
-            let full_path = if mount_point.is_empty() {
-                p.to_string()
+            // Paths in the index are relative to the mount point ("../../../" or
+            // "../../../FSD/" etc.), so join them with a separator before comparing.
+            let mount = mount_point.trim_end_matches('/');
+            let file = p.trim_start_matches('/');
+            let full_path = if mount.is_empty() {
+                file.to_string()
             } else {
-                format!("{}{}", mount_point.trim_end_matches('/'), p)
+                format!("{}/{}", mount, file)
             };
-            full_path
-                .trim_start_matches("../../../")
-                .trim_start_matches("../../")
-                .trim_start_matches("../")
-                .to_lowercase()
+            let mut rel = full_path.as_str();
+            while let Some(rest) = rel.strip_prefix("../") {
+                rel = rest;
+            }
+            rel.trim_start_matches('/').to_lowercase()
         })
         .collect();
 
@@ -199,11 +203,15 @@ mod tests {
     use super::*;
 
     fn write_pak(path: &std::path::Path, files: &[&str]) {
+        write_pak_mounted(path, "../../../", files);
+    }
+
+    fn write_pak_mounted(path: &std::path::Path, mount: &str, files: &[&str]) {
         let file = fs::File::create(path).unwrap();
         let mut writer = repak::PakBuilder::new().writer(
             std::io::BufWriter::new(file),
             repak::Version::V11,
-            "../../../".to_string(),
+            mount.to_string(),
             None,
         );
         for f in files {
@@ -241,5 +249,20 @@ mod tests {
         let mut files = result[0].conflicting_files.clone();
         files.sort();
         assert_eq!(files, vec!["fsd/content/gun.uasset", "fsd/content/gun.uexp"]);
+    }
+
+    #[test]
+    fn detects_conflicts_across_different_mount_points() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.pak");
+        let d = dir.path().join("d.pak");
+        write_pak(&a, &["FSD/Content/Gun.uasset"]);
+        write_pak_mounted(&d, "../../../FSD/", &["Content/Gun.uasset"]);
+
+        let result = check_mod_conflicts(&[info(1, &a), info(4, &d)], None);
+        assert_eq!(result.len(), 2);
+        for m in &result {
+            assert_eq!(m.conflicting_files, vec!["fsd/content/gun.uasset"]);
+        }
     }
 }
