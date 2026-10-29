@@ -22,6 +22,8 @@ import { asyncPoolAll } from "@/utils/AsyncPool";
 
 export type AddModFromUrlResult = {
     status: "invalid" | "exists" | "added";
+    /** Why it failed when the lookup itself errored (network, login...), not just "no such mod" */
+    error?: string;
     modName?: string;
     mod?: CompleteModData;
     downloadAfterAdd?: boolean;

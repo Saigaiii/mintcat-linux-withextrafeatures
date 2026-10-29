@@ -56,6 +56,11 @@ export function useInstallOrderVersion(): number {
     return useSyncExternalStore(orderSignal.subscribe, orderSignal.version);
 }
 
+/** The install order array (a new array whenever the order changes) */
+export function useInstallOrder(): number[] {
+    return useSyncExternalStore(orderSignal.subscribe, () => order);
+}
+
 const SHOW_PATHS_KEY = 'mintcat-show-local-paths';
 const displaySignal = createSignal();
 let showLocalPaths = (() => {

@@ -635,5 +635,6 @@
 	"repoUpdate.notLinked": "此 Mod 未关联到仓库帖子。右键 → 关联到 Pak Hub 帖子…",
 	"repoUpdate.upToDate": "已是最新上传",
 	"repoUpdate.iconNewer": "仓库中有更新的上传（{{date}}）—— 右键 → 更新",
-	"repoUpdate.iconDiffers": "你的文件与仓库最新上传（{{date}}）不同 —— 右键 → 更新 可切换"
+	"repoUpdate.iconDiffers": "你的文件与仓库最新上传（{{date}}）不同 —— 右键 → 更新 可切换",
+	"linkCheck.errorShort": "暂时无法检查（悬停查看原因）"
 }

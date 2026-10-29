@@ -1,5 +1,5 @@
 import React, {useState, useEffect} from "react";
-import {Flex, Form, Spin, Typography} from "antd";
+import {Flex, Form, Spin, Tooltip, Typography} from "antd";
 import {t} from "i18next";
 import TextArea from "antd/es/input/TextArea";
 import {CheckCircleFilled, CloseCircleFilled, InfoCircleOutlined, WarningFilled} from "@ant-design/icons";
@@ -57,7 +57,12 @@ function StatusRow({link, status}: { link: string; status: LinkStatus }) {
             break;
         case 'error':
             icon = <WarningFilled style={{color: '#faad14'}}/>;
-            label = <Typography.Text type="warning">{t("linkCheck.error", {reason: status.message})}</Typography.Text>;
+            // Keep it to one line; the full reason (e.g. mod.io login) is on hover
+            label = (
+                <Tooltip title={status.message}>
+                    <Typography.Text type="warning" style={{cursor: "help"}}>{t("linkCheck.errorShort")}</Typography.Text>
+                </Tooltip>
+            );
             break;
         default:
             icon = <InfoCircleOutlined style={{opacity: 0.6}}/>;

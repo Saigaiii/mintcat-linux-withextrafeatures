@@ -207,6 +207,11 @@ async function logLinkResult(url: string, r: AddModFromUrlResult | undefined): P
         await logActivity('info', t("addMod.log.alreadyInList", {name: name || url}), url, 'add-mod');
         return 'exists';
     }
+    // The lookup itself failed (network, mod.io login...): say why instead of blaming the link
+    if (r?.error) {
+        await logActivity('error', t("addMod.log.failed", {reason: r.error}), url, 'add-mod');
+        return 'problem';
+    }
     // "invalid": the link isn't a mod link we understand, or no mod exists at it
     if (!isModLink(url)) {
         await logActivity('error', t("addMod.log.notAModLink"), url, 'add-mod');

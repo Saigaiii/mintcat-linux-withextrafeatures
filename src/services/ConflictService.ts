@@ -36,6 +36,13 @@ export interface ModConflictResponse {
 
 // Module-level state storage for conflict information
 const conflictMap = new Map<number, ConflictInfo>();
+// Bumped on every change so components can depend on it (see useConflictVersion)
+let conflictVersion = 0;
+const conflictListeners = new Set<() => void>();
+function bumpConflictVersion() {
+    conflictVersion++;
+    conflictListeners.forEach(l => l());
+}
 
 /**
  * Extra info captured by the conflict check so the UI can name mods
@@ -188,6 +195,7 @@ export class ConflictService {
             conflictMap.set(info.modId, info);
         }
         
+        bumpConflictVersion();
         // Emit event to notify UI components about conflict updates
         // Emit for all mods that might need to update their display
         this.emitUpdateEvents();
@@ -233,6 +241,15 @@ export class ConflictService {
         return Array.from(conflictMap.values());
     }
     
+    static subscribe(listener: () => void): () => void {
+        conflictListeners.add(listener);
+        return () => conflictListeners.delete(listener);
+    }
+
+    static version(): number {
+        return conflictVersion;
+    }
+
     static getModName(modId: number): string {
         return modMetaMap.get(modId)?.name || `#${modId}`;
     }
@@ -344,6 +361,7 @@ export class ConflictService {
     static clearAll(): void {
         const previousModIds = Array.from(conflictMap.keys());
         conflictMap.clear();
+        bumpConflictVersion();
         
         // Emit update events for previously conflicting mods
         for (const modId of previousModIds) {

@@ -42,7 +42,17 @@ function readOpenState(): boolean {
     }
 }
 
+export interface ActivitySnapshot {
+    entries: readonly ActivityEntry[];
+    open: boolean;
+    unseenProblems: number;
+}
+
+/** Replaced (never mutated) on every change so React sees a new value */
+let snapshot: ActivitySnapshot = {entries: [], open: panelOpen, unseenProblems: 0};
+
 function notify() {
+    snapshot = {entries: entries.slice(), open: panelOpen, unseenProblems};
     listeners.forEach(listener => {
         try {
             listener();
@@ -102,6 +112,11 @@ export function formatLogTime(time: number): string {
 }
 
 export const ActivityLog = {
+    /** Current state for useSyncExternalStore (a new object after every change) */
+    getSnapshot(): ActivitySnapshot {
+        return snapshot;
+    },
+
     getEntries(): readonly ActivityEntry[] {
         return entries;
     },

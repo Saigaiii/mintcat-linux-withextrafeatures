@@ -6,21 +6,17 @@ import {appLogDir} from "@tauri-apps/api/path";
 import {openPath} from "@tauri-apps/plugin-opener";
 import {ActivityEntry, ActivityLevel, ActivityLog, formatLogTime, LOG_PANEL_HEIGHT} from "@/services/ActivityLog";
 
-/** Re-renders when the log or its open state changes */
+/**
+ * Log state for components. Values come from the store's snapshot (a new object on every
+ * change) rather than direct store calls, which the React Compiler would cache forever.
+ */
 export function useActivityLog() {
-    const version = useSyncExternalStore(
-        (cb) => ActivityLog.subscribe(cb),
-        () => {
-            const all = ActivityLog.getEntries();
-            const lastId = all.length > 0 ? all[all.length - 1].id : 0;
-            return `${all.length}:${lastId}:${ActivityLog.isOpen()}:${ActivityLog.getUnseenProblems()}`;
-        }
-    );
+    const snap = useSyncExternalStore(ActivityLog.subscribe, ActivityLog.getSnapshot);
     return {
-        version,
-        entries: ActivityLog.getEntries(),
-        open: ActivityLog.isOpen(),
-        unseenProblems: ActivityLog.getUnseenProblems(),
+        version: snap,
+        entries: snap.entries,
+        open: snap.open,
+        unseenProblems: snap.unseenProblems,
     };
 }
 

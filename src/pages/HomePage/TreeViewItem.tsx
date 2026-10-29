@@ -35,7 +35,7 @@ import {TimeUtils} from "@/utils/TimeUtils.ts";
 import type {FolderInfo} from "./TreeView";
 import {ConflictService, type ModConflictSummary} from "@/services/ConflictService";
 import {ModConflictDetails} from "@/components/ConflictDetails";
-import {InstallOrder, useInstallOrderVersion, useShowLocalPaths} from "@/services/ListDisplay";
+import {useInstallOrder, useShowLocalPaths} from "@/services/ListDisplay";
 import {RepositoryUpdates} from "@/services/RepositoryUpdates";
 
 const {useToken} = theme;
@@ -46,6 +46,16 @@ const pendingEnabledChanges = new Map<number, boolean>();
 // 模块级别的版本切换锁定，防止快速重复点击导致下载冲突
 // key: modId, value: { isProcessing: boolean, abortController?: AbortController }
 const versionSwitchLocks = new Map<number, { isProcessing: boolean; currentVersion?: string }>();
+
+/** Number of mods this one shares files with (null if none); `_version` as for summarizeConflicts */
+function conflictCountAt(modId: number, _version: number): number | null {
+    return ConflictService.getConflict(modId)?.conflictingMods.length ?? null;
+}
+
+/** Conflict summary for a row; `_version` makes conflict data changes a compiler dependency */
+function summarizeConflicts(modId: number, order: number[], _version: number): ModConflictSummary {
+    return ConflictService.summarize(modId, order);
+}
 
 export function getVersionSwitchLock(modId: number): { isProcessing: boolean; currentVersion?: string } {
     return versionSwitchLocks.get(modId) || { isProcessing: false };
@@ -741,11 +751,14 @@ function ModTreeViewWarring({nodeData}) {
         [nodeData.modId]
     );
 
-    // Re-rate when the list order changes (winners depend on it)
-    useInstallOrderVersion();
-    useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
-    const repoUpdate = RepositoryUpdates.updateState(nodeData.modId);
-    const conflictSummary = hasConflict ? ConflictService.summarize(nodeData.modId, InstallOrder.get()) : 'harmless';
+    // Inputs from the stores as hook values, so the React Compiler recomputes when they change
+    const installOrder = useInstallOrder();
+    const conflictVersion = useSyncExternalStore(ConflictService.subscribe, ConflictService.version);
+    const repoVersion = useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
+    const repoUpdate = RepositoryUpdates.updateStateAt(nodeData.modId, repoVersion);
+    const conflictSummary = hasConflict
+        ? summarizeConflicts(nodeData.modId, installOrder, conflictVersion)
+        : 'harmless';
     const conflictColor: Record<ModConflictSummary, string> = {
         noEffect: '#ff4d4f',
         losesGameplay: '#fa8c16',
@@ -755,10 +768,10 @@ function ModTreeViewWarring({nodeData}) {
     };
 
     // 生成冲突提示信息
+    const conflictModCount = conflictCountAt(nodeData.modId, conflictVersion);
     const getConflictTooltip = () => {
-        const conflict = ConflictService.getConflict(nodeData.modId);
-        if (!conflict) return t("conflict.withOtherMods");
-        return t(`conflict.summary.${conflictSummary}`, {mods: conflict.conflictingMods.length});
+        if (conflictModCount === null) return t("conflict.withOtherMods");
+        return t(`conflict.summary.${conflictSummary}`, {mods: conflictModCount});
     };
 
     return (
@@ -1071,7 +1084,8 @@ export function TreeViewItem({
 }: TreeViewItemProps) {
     const {token} = useToken();
     // Menu shows Link/Unlink depending on the mod's repository link
-    useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
+    const repoLinkVersion = useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
+    const repoLink = RepositoryUpdates.linkForModAt(nodeData, repoLinkVersion);
 
     const [enabled, setEnabled] = useState(() =>
         getPendingEnabled(nodeData.modId, nodeData.enabled)
@@ -1117,11 +1131,11 @@ export function TreeViewItem({
         ...(nodeData.sourceType === ModSourceType.Local ? [
             {type: 'divider' as const},
             {
-                label: t(RepositoryUpdates.linkForModSync(nodeData) ? 'repoLink.changeMenu' : 'repoLink.menu'),
+                label: t(repoLink ? 'repoLink.changeMenu' : 'repoLink.menu'),
                 key: 'repo_link',
                 icon: <LinkOutlined />,
             },
-            ...(RepositoryUpdates.linkForModSync(nodeData)
+            ...(repoLink
                 ? [{label: t('repoLink.unlinkMenu'), key: 'repo_unlink', icon: <DisconnectOutlined />}]
                 : []),
         ] : []),

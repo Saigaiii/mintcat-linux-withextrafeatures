@@ -152,6 +152,18 @@ export const RepositoryUpdates = {
         return updates.get(modId);
     },
 
+    /**
+     * For components: pass the version from useSyncExternalStore so the React Compiler
+     * recomputes when links/updates change (it caches calls whose inputs didn't change).
+     */
+    updateStateAt(modId: number, _version: number): RepositoryUpdateState | undefined {
+        return updates.get(modId);
+    },
+
+    linkForModAt(mod: { modId?: number; url?: string; download?: { cachePath?: string } }, _version: number): RepositoryLink | undefined {
+        return this.linkForModSync(mod);
+    },
+
     async getLink(mod: CompleteModData): Promise<RepositoryLink | undefined> {
         const store = await load();
         const byMod = store.byMod[String(mod.modId)];

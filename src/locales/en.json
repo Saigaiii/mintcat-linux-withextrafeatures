@@ -635,5 +635,6 @@
     "repoUpdate.notLinked": "This mod isn't linked to a repository post. Right-click → Link to Pak Hub post…",
     "repoUpdate.upToDate": "Already the newest upload",
     "repoUpdate.iconNewer": "Newer upload on the repository ({{date}}) — right-click → Update",
-    "repoUpdate.iconDiffers": "Your file differs from the repository's newest upload ({{date}}) — right-click → Update to switch"
+    "repoUpdate.iconDiffers": "Your file differs from the repository's newest upload ({{date}}) — right-click → Update to switch",
+    "linkCheck.errorShort": "Couldn't check right now (hover for why)"
 }

@@ -33,12 +33,13 @@ export class HomeViewModel extends BaseViewModel {
             return await this.homeService.addModFromUrl(url, groupId);
         } catch (error) {
             console.error('Failed to add mod from URL:', error);
+            const reason = error instanceof Error ? error.message : String(error);
             if (NexusModsApi.isAuthenticationRequiredError(error)) {
                 showNexusModsApiKeyRequiredMessage();
-                return { status: "invalid" };
+                return { status: "invalid", error: reason };
             }
             message.error(t("error.addModToDatabase"));
-            return { status: "invalid" };
+            return { status: "invalid", error: reason };
         }
     }
 
