@@ -1081,7 +1081,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
             const now = Date.now();
             if (focused && now - this.lastFocusRecheck > 5000) {
                 this.lastFocusRecheck = now;
-                ModUpdateService.recheckLocalModFiles().catch(e => console.warn('[HomePage] local file re-check failed', e));
+                ModUpdateService.recheckLocalModFiles()
+                    .then(changed => (changed > 0 ? this.updateTreeView() : undefined))
+                    .catch(e => console.warn('[HomePage] local file re-check failed', e));
             }
         }).then(unlisten => {
             this.unlistenFocusRecheck = unlisten;
@@ -1145,7 +1147,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // Check for mod updates
         ModUpdateService.checkModList((loading) => {
             this.setState({ loading });
-        }).then();
+        }).then(() => {
+            // The list may have loaded before this check finished; show its results
+            this.updateTreeView().catch(e => console.warn('[HomePage] refresh after file check failed', e));
+        });
     }
 
     componentWillUnmount(): void {

@@ -854,9 +854,11 @@ export class ModUpdateService {
      * 批量检查本地模组缓存（优化版本）
      * 只检查本地类型的模组，减少不必要的操作
      */
-    public static async batchCheckLocalModCache(allMods: CompleteModData[]): Promise<void> {
+    /** @returns how many local mods changed between found and missing */
+    public static async batchCheckLocalModCache(allMods: CompleteModData[]): Promise<number> {
         const localMods = allMods.filter(m => m.sourceType === ModSourceType.Local);
-        if (localMods.length === 0) return;
+        if (localMods.length === 0) return 0;
+        let changed = 0;
         const missingFound: CompleteModData[] = [];
         const backAgain: CompleteModData[] = [];
 
@@ -881,6 +883,7 @@ export class ModUpdateService {
                 
                 // 只有状态变化时才更新数据库和发送事件
                 if (fileExists === currentNotFound) {
+                    changed++;
                     await modsApi.upsertModStatus({
                         modId: modItem.modId!,
                         isLocalNotFound: !fileExists
@@ -914,14 +917,15 @@ export class ModUpdateService {
             await logActivity('info', t("mod.log.fileBack", {name: mod.displayName || mod.originalName || ''}),
                 mod.download?.cachePath || mod.url, 'files');
         }
+        return changed;
     }
 
     /**
      * Re-check local mod files (e.g. when the window regains focus after files were moved)
      */
-    public static async recheckLocalModFiles(): Promise<void> {
+    public static async recheckLocalModFiles(): Promise<number> {
         const modsApi = await StorageAPI.getMods();
-        await this.batchCheckLocalModCache(await modsApi.getAllCompleteModData());
+        return await this.batchCheckLocalModCache(await modsApi.getAllCompleteModData());
     }
 
     /**
