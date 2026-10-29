@@ -650,5 +650,12 @@
 	"localMods.siblingsDone": "又更新了 {{count}} 个模组",
 	"repo.urlPlaceholder": "网站地址，例如 https://pak-hub.pages.dev",
 	"repo.suggested": "推荐",
-	"repo.errorNoUrl": "请先输入网站地址。"
+	"repo.errorNoUrl": "请先输入网站地址。",
+	"repo.addToFolder": "添加到文件夹",
+	"repo.storedHint": "文件下载到 MINTCAT 自己的数据文件夹（repository-mods）。从列表中移除该模组时会删除该文件。",
+	"repo.addTitleFor": "添加 {{name}}",
+	"repo.addToList": "添加到列表",
+	"repo.addedToFolder": "已将 {{name}} 添加到 {{folder}}",
+	"repo.addedToListToast": "已添加 {{count}} 个模组到 {{folder}}",
+	"repo.removedDownload": "已删除 {{name}} 的下载文件"
 }

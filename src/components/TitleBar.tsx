@@ -13,6 +13,8 @@ import {
 } from '@ant-design/icons';
 import {open} from "@tauri-apps/plugin-shell";
 import packageJson from '../../package.json';
+import {BuildInfo} from "@/buildInfo";
+import {getCurrentWindow} from "@tauri-apps/api/window";
 import {IntegrateApi} from "../apis/IntegrateApi.ts";
 import {StorageAPI} from "@/storage";
 import {emitEvent, emitVoidEvent, listenEvent, UnlistenFn} from "@/events";
@@ -48,6 +50,9 @@ class TitleBar extends React.Component<any, any> {
     }
 
     private getDisplayVersion() {
+        if (BuildInfo.customVersion) {
+            return BuildInfo.customVersion;
+        }
         if (packageJson.channel === "stable") {
             return `v${packageJson.version}`;
         }
@@ -159,6 +164,11 @@ class TitleBar extends React.Component<any, any> {
     }
 
     async componentDidMount() {
+        if (BuildInfo.windowTitle) {
+            getCurrentWindow().setTitle(BuildInfo.windowTitle).catch(() => {
+                // keep the default title
+            });
+        }
         this.loadActiveGame();
         this.unlistenActiveGameChange = await listenEvent('active-game-change', (game) => {
             this.setState({ gameName: game.displayName });
@@ -248,6 +258,12 @@ class TitleBar extends React.Component<any, any> {
                                 backgroundClip: "text",
                                 color: "transparent",
                             }}>CAT</span>
+                            {BuildInfo.edition && <span style={{
+                                marginLeft: "0.3em",
+                                backgroundImage: "linear-gradient(to right, deeppink, #ff7a45)",
+                                backgroundClip: "text",
+                                color: "transparent",
+                            }}>{BuildInfo.edition}</span>}
                         </b>
                     </h1>
                     <span style={{fontSize: "12px", color: "gray", lineHeight: "54px", verticalAlign: "bottom"}}>

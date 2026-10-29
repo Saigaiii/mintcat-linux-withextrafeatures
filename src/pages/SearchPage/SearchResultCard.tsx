@@ -5,6 +5,7 @@ import {t} from 'i18next';
 import {open} from '@tauri-apps/plugin-shell';
 import type {MenuProps} from 'antd';
 import {SearchResultItem, isRepositorySource, type RepositoryResultData} from '@/apis/search';
+import {repositoryDescription, repositoryTitleFromFiles, useRepositoryDetail} from '@/apis/repositories/details';
 
 interface SearchResultCardProps {
     item: SearchResultItem;
@@ -64,12 +65,18 @@ export const SearchResultCard = memo<SearchResultCardProps>(({
         ? item.author.cachedAvatarUrl
         : item.author.avatarUrl;
 
-    // 显示的名称和摘要
-    const displayName = item.nameTrans || item.name;
-    const displaySummary = item.summaryTrans || item.summary;
     // User-added repositories have no images or download counts
     const isRepo = isRepositorySource(item.source);
     const repoData = isRepo ? item.rawData as RepositoryResultData | undefined : undefined;
+    // Pak Hub style lists only carry the first line of the post; the post itself has the
+    // full text and the file names, which make a better title ("AlwaysSprint")
+    const repoDetail = useRepositoryDetail(repoData?.baseUrl, repoData?.slug);
+    const repoTitle = repositoryTitleFromFiles(repoDetail);
+    const repoText = repositoryDescription(repoDetail);
+
+    // 显示的名称和摘要
+    const displayName = item.nameTrans || repoTitle || item.name;
+    const displaySummary = item.summaryTrans || repoText || item.summary;
     const repoDate = repoData?.postedAt && Number.isFinite(Date.parse(repoData.postedAt))
         ? new Date(repoData.postedAt).toLocaleDateString()
         : '';

@@ -650,5 +650,12 @@
     "localMods.siblingsDone": "Updated {{count}} more mod(s)",
     "repo.urlPlaceholder": "Site address, e.g. https://pak-hub.pages.dev",
     "repo.suggested": "Suggested",
-    "repo.errorNoUrl": "Type the site's address first."
+    "repo.errorNoUrl": "Type the site's address first.",
+    "repo.addToFolder": "Add to folder",
+    "repo.storedHint": "Downloaded into MINTCAT's own data folder (repository-mods). Removing the mod from your list deletes the file again.",
+    "repo.addTitleFor": "Add {{name}}",
+    "repo.addToList": "Add to list",
+    "repo.addedToFolder": "Added {{name}} to {{folder}}",
+    "repo.addedToListToast": "Added {{count}} mod(s) to {{folder}}",
+    "repo.removedDownload": "Deleted the downloaded file of {{name}}"
 }

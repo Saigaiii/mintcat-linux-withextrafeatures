@@ -11,6 +11,8 @@ export function repositorySourceKey(repo: ModRepository): RepositorySourceKey {
 /** Extra data kept on repository search results */
 export interface RepositoryResultData {
     repositoryId: string;
+    /** Site address, so cards can load the post's text and file names */
+    baseUrl: string;
     slug: string;
     postedAt: string;
     fileCount: number;
@@ -68,6 +70,7 @@ export class RepositorySearchProvider implements ISearchProvider {
     private toItem(mod: RepositoryModSummary): SearchResultItem {
         const raw: RepositoryResultData = {
             repositoryId: this.repository.id,
+            baseUrl: this.repository.baseUrl,
             slug: mod.slug,
             postedAt: mod.postedAt,
             fileCount: mod.fileCount + mod.threadFileCount,

@@ -23,6 +23,7 @@ import {
     initializeSearchProviders,
     isRepositorySource,
     syncRepositoryProviders,
+    repositorySourceLabel,
     repositorySourceKey,
     type SearchResultItem,
     type SearchSourceKey,
@@ -228,16 +229,20 @@ export function SearchPage() {
 
     // 搜索源选项（用于下拉框）
     const sourceOptions = useMemo(() => {
-        const registry = SearchProviderRegistry.getInstance();
-        const options: { value: string; label: string }[] = (state?.availableSources || [SearchSource.MODIO]).map((source) => ({
+        const sources = [...(state?.availableSources || [SearchSource.MODIO])];
+        // A remembered repository source can be selected before the list has loaded
+        if (state?.currentSource && isRepositorySource(state.currentSource) && !sources.includes(state.currentSource)) {
+            sources.push(state.currentSource);
+        }
+        const options: { value: string; label: string }[] = sources.map((source) => ({
             value: source,
             label: isRepositorySource(source)
-                ? (registry.get(source)?.displayName || source)
+                ? repositorySourceLabel(source)
                 : (sourceDisplayNames[source as SearchSource] || source),
         }));
         options.push({value: MANAGE_REPOSITORIES, label: t('repo.manageOption')});
         return options;
-    }, [state?.availableSources]);
+    }, [state?.availableSources, state?.currentSource]);
 
     // 搜索占位符
     const placeholder = useMemo(() => {

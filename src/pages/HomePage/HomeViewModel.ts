@@ -15,6 +15,7 @@ import {
 } from "@/services/HomeService.ts";
 import type {ModInfo} from "@/apis/modio/ModInfo.ts";
 import {NexusModsApi, showNexusModsApiKeyRequiredMessage} from "@/apis/nexusmods";
+import {cleanupRemovedRepositoryMod} from "@/services/RepositoryModCleanup";
 
 /**
  * HomeViewModel handles mod operations and business logic
@@ -72,6 +73,8 @@ export class HomeViewModel extends BaseViewModel {
 
     public async removeMod(id: number): Promise<void> {
         await this.homeService.removeModFromActiveProfile(id);
+        // Mods downloaded from a repository (Pak Hub): delete the downloaded file too
+        await cleanupRemovedRepositoryMod(id);
     }
 
     public async setDisplayName(id: number, name: string): Promise<void> {

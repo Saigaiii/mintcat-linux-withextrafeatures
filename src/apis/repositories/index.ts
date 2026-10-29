@@ -247,6 +247,11 @@ export const RepositoryStore = {
         await save(list.filter(r => r.id !== id));
     },
 
+    /** Name of a repository from the already-loaded list (no waiting) */
+    peekName(id: string): string | undefined {
+        return cache?.find(r => r.id === id)?.name;
+    },
+
     async get(id: string): Promise<ModRepository | undefined> {
         return (await this.list()).find(r => r.id === id);
     },

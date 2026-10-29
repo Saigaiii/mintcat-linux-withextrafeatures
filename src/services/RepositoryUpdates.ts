@@ -201,6 +201,15 @@ export const RepositoryUpdates = {
         await save();
     },
 
+    /** Forget a downloaded file that was never added (or was deleted) */
+    async forgetPath(path: string): Promise<void> {
+        const store = await load();
+        if (store.byPath[path]) {
+            delete store.byPath[path];
+            await save();
+        }
+    },
+
     /**
      * Find the post a local mod's file came from by its exact file name.
      * Returns the link, 'ambiguous' when several posts could be it, or undefined.
@@ -300,6 +309,7 @@ export const RepositoryUpdates = {
 
         const info = await stat(target);
         const modsApi = await StorageAPI.getMods();
+        const previousPath = modPath(mod);
         await modsApi.updateMod(mod.modId, {url: target});
         await modsApi.upsertModDownload({modId: mod.modId, cachePath: target, fileSize: info.size, downloadProgress: 100});
         await modsApi.upsertModStatus({modId: mod.modId, lastUpdateDate: info.mtime?.getTime() ?? Date.now(), isLocalNotFound: false});
@@ -307,6 +317,12 @@ export const RepositoryUpdates = {
         await this.setLink(mod.modId, {...link, postedAt: upload.postedAt, sizeBytes: upload.sizeBytes});
         updates.delete(mod.modId);
         notify();
+
+        // An earlier download with a different file name is no longer used
+        if (previousPath && previousPath !== target && !(await modsApi.getModByUrl(previousPath))) {
+            const {deleteRepositoryFile} = await import("@/services/RepositoryModCleanup");
+            await deleteRepositoryFile(previousPath).catch(() => false);
+        }
 
         const updated = await modsApi.getCompleteModData(mod.modId);
         if (updated) await emitEvent("mod-treeview-update", {modId: mod.modId, data: updated});
