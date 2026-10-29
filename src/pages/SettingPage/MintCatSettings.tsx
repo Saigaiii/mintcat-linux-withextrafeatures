@@ -1,4 +1,5 @@
 import {t} from "i18next";
+import {openMintImport} from "@/dialogs/MintImportDialog";
 import React from "react";
 import {openPath} from "@tauri-apps/plugin-opener";
 import {open} from "@tauri-apps/plugin-dialog";
@@ -240,6 +241,13 @@ export function MintCatSettings() {
                                 {...ButtonLayout}
                                 onClick={onImportConfigClick}>
                             {t("Open")}
+                        </Button>
+                    </Form.Item>
+                    <Form.Item label={t("mintImport.settingsLabel")}>
+                        <Button type="dashed"
+                                {...ButtonLayout}
+                                onClick={() => openMintImport()}>
+                            {t("mintImport.choose")}
                         </Button>
                     </Form.Item>
                     <Form.Item label={t("Cache Directory")}>

@@ -1,7 +1,8 @@
 import {useState, useImperativeHandle, forwardRef, useEffect} from 'react';
-import {Button, Checkbox, Flex, List, message, Modal, Space, Tag} from 'antd';
+import {Alert, Button, Checkbox, Flex, List, message, Modal, Space, Tag} from 'antd';
 import {t} from "i18next";
-import {CloseOutlined, FileOutlined, FolderOpenOutlined} from "@ant-design/icons";
+import {CloseOutlined, FileOutlined, FolderOpenOutlined, ImportOutlined} from "@ant-design/icons";
+import {openMintImport} from "@/dialogs/MintImportDialog";
 import {ConfigDataType} from "@/storage/DataType.ts";
 import {MessageBox} from "@/components/MessageBox.ts";
 import {emitVoidEvent, useEventListener} from "@/events";
@@ -69,6 +70,11 @@ export const ConfigManageDialog = forwardRef((_props, ref) => {
         emitVoidEvent("config-manage-dialog-closed");
     };
 
+    const onMintImportClick = async () => {
+        handleCancel();
+        await openMintImport();
+    };
+
     const onOpenClick = async (path: string) => {
         await dialogConfigService.openPath(path);
     };
@@ -134,6 +140,14 @@ export const ConfigManageDialog = forwardRef((_props, ref) => {
                 <div>
                     {t("migrate.selectConfigsToImport")}
                 </div>
+                <Alert type={dataSource.length === 0 ? "warning" : "info"}
+                       showIcon
+                       message={t(dataSource.length === 0 ? "mintImport.configNone" : "mintImport.configHint")}
+                       action={
+                           <Button size="small" icon={<ImportOutlined/>} disabled={isImporting} onClick={onMintImportClick}>
+                               {t("mintImport.openFromConfig")}
+                           </Button>
+                       }/>
                 <List size="small"
                       bordered={true}
                       dataSource={dataSource}

@@ -53,6 +53,9 @@ export interface EventPayloads {
   /** 配置管理对话框打开 */
   'config-manage-dialog-open': void;
 
+  /** Open "Import from mint" (optionally with a mod_data.json already picked or dropped) */
+  'mint-import-open': { path?: string; text?: string };
+
   /** 标题栏头像加载 */
   'title-bar-load-avatar': void;
 

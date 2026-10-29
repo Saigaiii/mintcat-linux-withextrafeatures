@@ -24,6 +24,8 @@ import {AppInitializer} from "@/core/AppInitializer";
 import './App.css';
 import {EmptyPage} from "@/pages/EmptyPage.tsx";
 import {ConfigManageDialog} from "@/dialogs/ConfigManageDialog";
+import {MintImportDialog} from "@/dialogs/MintImportDialog";
+import {useFileDrop} from "@/hooks/useFileDrop";
 
 import {SelectGameDialog} from "@/dialogs/SelectGameDialog";
 import {useKeyboardListener} from "@/hooks/useKeyboardListener.tsx";
@@ -80,6 +82,7 @@ const AppContent = () => {
     useAppError();
     useDeepLinkHandler(isAppViewModelReady);
     useOAuthCallback();
+    useFileDrop();
     // 配置导入成功后刷新主题和语言，使界面立即反映迁移后的设置
     useEventListener('config-imported', async () => {
         try {
@@ -148,6 +151,7 @@ const AppContent = () => {
             <OnboardingTour open={showOnboarding} onComplete={handleOnboardingComplete}/>
             <UpdateDialog/>
             <ConfigManageDialog/>
+            <MintImportDialog/>
             <SelectGameDialog/>
             <Header className={"app-header"}>
                 <TitleBar/>

@@ -12,7 +12,7 @@ import {
     CheckSquareOutlined, ClearOutlined, CloseCircleOutlined, CloseOutlined, CopyOutlined,
     DeleteOutlined,
     EditOutlined, FieldTimeOutlined, LoadingOutlined, MinusSquareOutlined, PauseCircleOutlined, PlayCircleOutlined,
-    PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined,
+    PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined, ImportOutlined,
     UnorderedListOutlined, WarningOutlined
 } from "@ant-design/icons";
 import * as checkbox from "antd/es/checkbox";
@@ -61,6 +61,7 @@ import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
 import { RepositoryUpdates } from "@/services/RepositoryUpdates";
 import { logActivity } from "@/services/ActivityLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
+import { openMintImport } from "@/dialogs/MintImportDialog";
 import { ConflictService } from "@/services/ConflictService";
 import { ConflictReport } from "@/components/ConflictDetails";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
@@ -1351,6 +1352,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                 </Tooltip>
                                 <Tooltip title={t("Copy List")}>
                                     <Button icon={<CopyOutlined/>} type={"text"} onClick={this.onMenuBarCopyListClick}/>
+                                </Tooltip>
+                                <Tooltip title={t("mintImport.button")}>
+                                    <Button icon={<ImportOutlined/>} type={"text"}
+                                            onClick={() => openMintImport()}/>
                                 </Tooltip>
                                 <Tooltip title={t("Clean Missing Local Mods")}>
                                     <Button icon={<ClearOutlined/>} type={"text"} onClick={this.onMenuBarCleanMissingLocalModsClick}/>
