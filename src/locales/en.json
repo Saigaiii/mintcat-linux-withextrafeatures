@@ -688,7 +688,7 @@
     "mintImport.failedItems": "Could not add ({{count}})",
     "mintImport.movedFiles": "Found in a different folder and added from there ({{count}})",
     "mintImport.modioUnavailable": "mod.io isn't answering ({{reason}}). Check your mod.io login in User Settings (top right) and try again — nothing was imported.",
-    "mintImport.dropNotJson": "Only a mint mod_data.json can be dropped here.",
+    "mintImport.dropNotJson": "Drop a mint mod_data.json, .pak/.zip files or mod links here.",
     "mintImport.dropLocal": "To add .pak/.zip files, open Add Mod → Local and drop them there.",
     "mintImport.openFromConfig": "Import from mint…",
     "mintImport.configHint": "This copies the config's settings (such as the game folder and mod.io login) and adds its profiles as new profiles. To only add the mods from a mint mod_data.json to your current profile, use Import from mint.",

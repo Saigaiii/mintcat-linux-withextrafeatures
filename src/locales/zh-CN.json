@@ -688,7 +688,7 @@
 	"mintImport.failedItems": "无法添加（{{count}}）",
 	"mintImport.movedFiles": "在其他文件夹中找到并从那里添加（{{count}}）",
 	"mintImport.modioUnavailable": "mod.io 无响应（{{reason}}）。请在右上角的用户设置中检查 mod.io 登录后重试——未导入任何内容。",
-	"mintImport.dropNotJson": "这里只能拖入 mint 的 mod_data.json。",
+	"mintImport.dropNotJson": "可以拖入 mint 的 mod_data.json、.pak/.zip 文件或模组链接。",
 	"mintImport.dropLocal": "要添加 .pak/.zip 文件，请打开“添加模组 → 本地”并把文件拖到那里。",
 	"mintImport.openFromConfig": "从 mint 导入…",
 	"mintImport.configHint": "这会复制该配置中的设置（例如游戏路径和 mod.io 登录），并将其中的配置方案作为新配置添加。如果只想把 mint mod_data.json 中的模组添加到当前配置，请使用“从 mint 导入”。",
