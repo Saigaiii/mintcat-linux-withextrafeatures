@@ -1,7 +1,7 @@
 import {t} from "i18next";
 import React, {useState, useSyncExternalStore} from "react";
 import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
-import {CloseCircleFilled, DisconnectOutlined} from "@ant-design/icons";
+import {CloseCircleFilled, DisconnectOutlined, FolderOpenOutlined} from "@ant-design/icons";
 import {
     ClockCircleOutlined,
     DeleteOutlined,
@@ -643,7 +643,7 @@ function ModTreeViewVersionSelect({nodeData}) {
 }
 
 
-function ModTreeViewWarring({nodeData}) {
+function ModTreeViewWarring({nodeData, onLocate}: { nodeData: any; onLocate?: () => void }) {
     // 使用 ref 存储 nodeData 以便在回调中访问最新值
     const nodeDataRef = React.useRef(nodeData);
     nodeDataRef.current = nodeData;
@@ -847,9 +847,16 @@ function ModTreeViewWarring({nodeData}) {
                         <span style={{fontFamily: "monospace", fontSize: 12, wordBreak: "break-all"}}>
                             {nodeDataRef.current.url || nodeDataRef.current.download?.cachePath || nodeData.url}
                         </span>
+                        {onLocate && <><br/><i>{t("localMods.clickToLocate")}</i></>}
                     </span>
                 }>
-                                <span className="text-red mr-4">
+                                <span className="text-red mr-4"
+                                      style={{cursor: onLocate ? "pointer" : undefined}}
+                                      onClick={(e) => {
+                                          e.stopPropagation();
+                                          onLocate?.();
+                                      }}
+                                      onMouseDown={(e) => e.stopPropagation()}>
                                     <CloseCircleFilled/>
                                 </span>
                 </Tooltip>
@@ -1140,6 +1147,11 @@ export function TreeViewItem({
         ...(nodeData.sourceType === ModSourceType.Local ? [
             {type: 'divider' as const},
             {
+                label: t((nodeData.localNoFound || nodeData.status?.isLocalNotFound) ? 'localMods.locateMissingMenu' : 'localMods.locateMenu'),
+                key: 'relocate',
+                icon: <FolderOpenOutlined />,
+            },
+            {
                 label: t(repoLink ? 'repoLink.changeMenu' : 'repoLink.menu'),
                 key: 'repo_link',
                 icon: <LinkOutlined />,
@@ -1202,7 +1214,10 @@ export function TreeViewItem({
 
                     {
                         //nodeData.sourceType === ModSourceType.Modio &&
-                        <ModTreeViewWarring nodeData={nodeData}/>
+                        <ModTreeViewWarring nodeData={nodeData}
+                                            onLocate={nodeData.sourceType === ModSourceType.Local
+                                                ? () => onMenuClick('relocate', nodeData.key)
+                                                : undefined}/>
                     }
 
                     {

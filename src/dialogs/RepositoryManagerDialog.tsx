@@ -2,7 +2,7 @@ import React, {useEffect, useState} from "react";
 import {t} from "i18next";
 import {Button, Empty, Flex, Input, List, message, Modal, Select, Typography} from "antd";
 import {DeleteOutlined, PlusOutlined} from "@ant-design/icons";
-import {ModRepository, RepositoryGame, RepositoryStore} from "@/apis/repositories";
+import {ModRepository, normalizeRepositoryUrl, RepositoryGame, RepositoryStore, SUGGESTED_REPOSITORIES} from "@/apis/repositories";
 import {logActivity} from "@/services/ActivityLog";
 
 interface Props {
@@ -34,22 +34,40 @@ export function RepositoryManagerDialog({open, onClose, onChanged}: Props) {
         return RepositoryStore.subscribe(() => RepositoryStore.list().then(list => setRepos([...list])));
     }, [open]);
 
-    const onAdd = async () => {
+    const addRepository = async (input: { name: string; url: string; game: RepositoryGame }) => {
         setError("");
+        if (!input.url.trim()) {
+            setError(t("repo.errorNoUrl"));
+            return;
+        }
         setAdding(true);
         try {
-            const repo = await RepositoryStore.add({name, url, game});
+            const repo = await RepositoryStore.add(input);
             message.success(t("repo.added", {name: repo.name}));
             await logActivity('success', t("repo.added", {name: repo.name}), repo.baseUrl, 'repository');
             setName("");
             setUrl("");
             onChanged(repo);
         } catch (e) {
-            setError(addErrorText(e));
+            const text = addErrorText(e);
+            setError(text);
+            await logActivity('error', text, input.url, 'repository');
         } finally {
             setAdding(false);
         }
     };
+
+    const onAdd = () => addRepository({name, url, game});
+
+    // One-click suggestions for sites not added yet
+    const known = new Set(repos.map(r => r.baseUrl.toLowerCase()));
+    const suggestions = SUGGESTED_REPOSITORIES.filter(s => {
+        try {
+            return !known.has(normalizeRepositoryUrl(s.url).toLowerCase());
+        } catch {
+            return false;
+        }
+    });
 
     const onRemove = async (repo: ModRepository) => {
         await RepositoryStore.remove(repo.id);
@@ -87,12 +105,32 @@ export function RepositoryManagerDialog({open, onClose, onChanged}: Props) {
                             </List.Item>
                         )}/>}
 
+            {suggestions.length > 0 &&
+                <Flex vertical gap={6} style={{marginTop: 12}}>
+                    <Typography.Text type="secondary" style={{fontSize: 12}}>{t("repo.suggested")}</Typography.Text>
+                    {suggestions.map(s => (
+                        <Flex key={s.url} align="center" justify="space-between" gap={8}
+                              style={{border: "1px solid rgba(128,128,128,0.35)", borderRadius: 6, padding: "6px 10px"}}>
+                            <Flex vertical style={{minWidth: 0}}>
+                                <Typography.Text strong>{s.name}</Typography.Text>
+                                <Typography.Text type="secondary" style={{fontSize: 12}}>
+                                    {s.url.replace(/^https?:\/\//, '')} · {s.game === 'rc' ? 'Rogue Core' : 'Deep Rock Galactic'}
+                                </Typography.Text>
+                            </Flex>
+                            <Button type="primary" icon={<PlusOutlined/>} loading={adding}
+                                    onClick={() => addRepository(s)}>
+                                {t("repo.add")}
+                            </Button>
+                        </Flex>
+                    ))}
+                </Flex>}
+
             <Typography.Title level={5} style={{marginTop: 16}}>{t("repo.addTitle")}</Typography.Title>
             <Flex vertical gap={8}>
                 <Input placeholder={t("repo.namePlaceholder")}
                        value={name}
                        onChange={(e) => setName(e.target.value)}/>
-                <Input placeholder="https://pak-hub.pages.dev"
+                <Input placeholder={t("repo.urlPlaceholder")}
                        value={url}
                        onChange={(e) => setUrl(e.target.value)}
                        onPressEnter={onAdd}/>
@@ -107,7 +145,6 @@ export function RepositoryManagerDialog({open, onClose, onChanged}: Props) {
                     <Button type="primary"
                             icon={<PlusOutlined/>}
                             loading={adding}
-                            disabled={!url.trim()}
                             onClick={onAdd}>
                         {t("repo.add")}
                     </Button>

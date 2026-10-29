@@ -17,6 +17,7 @@ export class SettingPage extends BasePage<any, any> {
 
     componentWillUnmount(): void {
         this.unhookLogPanel();
+        this.unhookWindowResized();
     }
 
     render() {

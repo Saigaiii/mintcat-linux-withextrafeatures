@@ -171,6 +171,23 @@ export const RepositoryApi = {
 const listeners = new Set<() => void>();
 let cache: ModRepository[] | null = null;
 
+/** Sites offered as one-click adds in the repository manager */
+export const SUGGESTED_REPOSITORIES: { name: string; url: string; game: RepositoryGame }[] = [
+    {name: 'Pak Hub', url: 'https://pak-hub.pages.dev', game: 'drg'},
+];
+
+/** "https://pak-hub.pages.dev" -> "Pak Hub" (used when no name is typed) */
+export function friendlyRepositoryName(baseUrl: string): string {
+    try {
+        const label = new URL(baseUrl).hostname.split('.')[0] ?? '';
+        const words = label.split(/[-_]+/).filter(Boolean);
+        if (words.length === 0) return new URL(baseUrl).host;
+        return words.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+    } catch {
+        return baseUrl;
+    }
+}
+
 function slugify(value: string): string {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'repo';
 }
@@ -215,7 +232,7 @@ export const RepositoryStore = {
         if (list.some(r => r.baseUrl.toLowerCase() === baseUrl.toLowerCase())) {
             throw new Error('duplicate');
         }
-        const name = input.name.trim() || new URL(baseUrl).host;
+        const name = input.name.trim() || friendlyRepositoryName(baseUrl);
         let id = slugify(name);
         let n = 2;
         while (list.some(r => r.id === id)) id = `${slugify(name)}-${n++}`;

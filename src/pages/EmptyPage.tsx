@@ -49,6 +49,10 @@ export class EmptyPage extends BasePage<EmptyPageProps, unknown> {
         this.hookWindowResized();
     }
 
+    componentWillUnmount(): void {
+        this.unhookWindowResized();
+    }
+
     render() {
         return (
             <div id="scrollableDiv" style={emptyPageHeight()}>

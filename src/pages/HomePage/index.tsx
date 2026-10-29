@@ -1,7 +1,7 @@
 import {getCurrentWindow} from "@tauri-apps/api/window";
 import React from "react";
 import {t} from "i18next";
-import {save} from "@tauri-apps/plugin-dialog";
+import {open as openFileDialog, save} from "@tauri-apps/plugin-dialog";
 import {copyFile, exists} from "@tauri-apps/plugin-fs";
 import {
     Button, Checkbox, Divider, Dropdown,
@@ -65,6 +65,7 @@ import { ConflictService } from "@/services/ConflictService";
 import { ConflictReport } from "@/components/ConflictDetails";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
 import { isUe4ssEnabled } from "@/utils/Ue4ssSetting";
+import { fileNameOf, findMovedSiblings, localModPath, parentDir, relocateLocalMod } from "@/services/LocalModRelocation";
 
 
 interface ModListPageState {
@@ -907,6 +908,81 @@ export class HomePage extends BasePage<any, ModListPageState> {
         });
     }
 
+    /**
+     * Let the user pick the new location of a local mod's file (moved or renamed on disk).
+     * Other missing mods from the same old folder that are in the new folder are offered too.
+     */
+    private async relocateLocalMod(modId: number) {
+        const mod = await this.getModById(modId);
+        if (!mod || mod.sourceType !== ModSourceType.Local) return;
+        const name = mod.displayName || fileNameOf(localModPath(mod));
+        const oldPath = localModPath(mod);
+        const oldDir = parentDir(oldPath);
+
+        let startDir: string | undefined;
+        try {
+            if (oldDir && await exists(oldDir)) startDir = oldDir;
+        } catch {
+            // the old folder may be outside what we can check; just open the default folder
+        }
+
+        const picked = await openFileDialog({
+            title: t("localMods.locateTitle", {name}),
+            multiple: false,
+            directory: false,
+            defaultPath: startDir,
+            filters: [{name: t("localMods.locateFilter"), extensions: ["pak", "zip"]}],
+        });
+        if (!picked || Array.isArray(picked)) return;
+
+        const result = await relocateLocalMod(mod, picked);
+        if (result.status === 'missing') {
+            message.error(t("Mod Path No Exists") + ": " + picked);
+            return;
+        }
+        if (result.status === 'inUse') {
+            message.warning(t("localMods.locateInUse", {name: result.otherName}));
+            return;
+        }
+        if (result.status !== 'ok') return;
+
+        message.success(t("localMods.located", {name}));
+        await logActivity('success', t("localMods.located", {name}), picked, 'files');
+
+        // A moved folder usually takes several mods with it
+        const siblings = await findMovedSiblings(oldDir, parentDir(picked), modId);
+        if (siblings.length > 0) {
+            const names = siblings.map(s => s.mod.displayName || fileNameOf(s.newPath));
+            const ok = await MessageBox.confirm({
+                title: t("localMods.siblingsTitle", {count: siblings.length}),
+                content: (
+                    <div>
+                        <Typography.Paragraph>{t("localMods.siblingsBody", {folder: parentDir(picked)})}</Typography.Paragraph>
+                        <ul style={{margin: 0, paddingLeft: 18, maxHeight: 200, overflowY: "auto"}}>
+                            {names.map(n => <li key={n}>{n}</li>)}
+                        </ul>
+                    </div>
+                ),
+                okText: t("localMods.siblingsOk"),
+                cancelText: t("Cancel"),
+            });
+            if (ok) {
+                let moved = 0;
+                for (const s of siblings) {
+                    const r = await relocateLocalMod(s.mod, s.newPath);
+                    if (r.status === 'ok') {
+                        moved++;
+                        await logActivity('success', t("localMods.located", {name: s.mod.displayName || fileNameOf(s.newPath)}), s.newPath, 'files');
+                    }
+                }
+                if (moved > 0) message.success(t("localMods.siblingsDone", {count: moved}));
+            }
+        }
+
+        await ModUpdateService.recheckLocalModFiles();
+        await this.updateTreeView();
+    }
+
     @autoBind
     private async onMenuClick(key: string, nodeKey: string) {
         const vm = await IoC.get(HomeViewModel);
@@ -994,6 +1070,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 await RepositoryUpdates.removeLink(id);
                 message.success(t("repoLink.unlinked"));
             }
+                break;
+            case "relocate":
+                await this.relocateLocalMod(id);
                 break;
             case "add_mod": {
                 // id 就是 folder ID，直接使用
@@ -1155,6 +1234,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     componentWillUnmount(): void {
         this.unhookLogPanel();
+        this.unhookWindowResized();
         this.unlistenFocusRecheck?.();
         // ✅ 清理所有事件监听器
         if (this.unlistenActiveGameChange) {

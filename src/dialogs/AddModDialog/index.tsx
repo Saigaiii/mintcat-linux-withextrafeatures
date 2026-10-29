@@ -256,6 +256,7 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
     }
 
     componentWillUnmount(): void {
+        this.unhookWindowResized();
         // ✅ 清理监听器
         if (this.unlistenInitData) {
             this.unlistenInitData();
