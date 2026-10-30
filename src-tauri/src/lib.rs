@@ -6,6 +6,7 @@ pub mod frontend;
 pub mod hot_update;
 pub mod integrator;
 pub mod network;
+pub mod system_icon;
 pub mod webview_host;
 
 pub fn run() {

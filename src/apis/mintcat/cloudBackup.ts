@@ -22,7 +22,8 @@ async function getRestorePath(): Promise<string> {
     return `${await getDatabasePath()}${RESTORE_SUFFIX}`;
 }
 
-async function getBackupPath(): Promise<string> {
+/** Where a restore keeps the database it replaced (mintcat.sqlite.bak, plus -wal/-shm) */
+export async function getBackupPath(): Promise<string> {
     return `${await getDatabasePath()}${BACKUP_SUFFIX}`;
 }
 

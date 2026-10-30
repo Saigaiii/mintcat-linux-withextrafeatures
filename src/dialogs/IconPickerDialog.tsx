@@ -3,11 +3,12 @@
  * file. Mounted once; opened with TitleBarLook.openPicker("logo" | "avatar").
  */
 import React, {useSyncExternalStore} from "react";
-import {Avatar, Button, Flex, Modal, Tooltip, Typography, message} from "antd";
+import {Avatar, Button, Checkbox, Flex, Modal, Tooltip, Typography, message} from "antd";
 import {PictureOutlined, UserOutlined} from "@ant-design/icons";
 import {t} from "i18next";
 import {open} from "@tauri-apps/plugin-dialog";
 import {BUILTIN_ICONS, imageFileToDataUrl, TitleBarLook, type IconChoice} from "@/services/TitleBarLook";
+import {SystemIcon, type SystemIconStatus} from "@/services/SystemIcon";
 
 const DEFAULT_LOGO = "icon.ico";
 
@@ -23,9 +24,17 @@ export function IconPickerDialog() {
     const target = TitleBarLook.editing(version);
     const current = target ? TitleBarLook.choice(target, version) : undefined;
     const [picked, setPicked] = React.useState<IconChoice | null>(null);
+    // The app icon can also become the icon of MINTCAT's app menu / taskbar entry (Linux AppImage)
+    const [menuStatus, setMenuStatus] = React.useState<SystemIconStatus | null>(null);
+    const [menuEntry, setMenuEntry] = React.useState(true);
+    const [applying, setApplying] = React.useState(false);
 
     React.useEffect(() => {
         setPicked(current ?? null);
+        if (target === "logo") {
+            void SystemIcon.status().then(setMenuStatus);
+            void SystemIcon.menuEntryEnabled().then(setMenuEntry);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [target]);
 
@@ -53,7 +62,20 @@ export function IconPickerDialog() {
     };
 
     const apply = async () => {
-        await TitleBarLook.set(target, picked);
+        setApplying(true);
+        try {
+            await TitleBarLook.set(target, picked);
+            if (target === "logo") {
+                if (menuStatus && menuStatus.entries.length > 0) await SystemIcon.setMenuEntryEnabled(menuEntry);
+                try {
+                    await SystemIcon.apply(srcOf(picked));
+                } catch (e) {
+                    message.warning(t("iconPicker.menuEntryFailed", {reason: String(e)}));
+                }
+            }
+        } finally {
+            setApplying(false);
+        }
         TitleBarLook.closePicker();
     };
 
@@ -82,7 +104,7 @@ export function IconPickerDialog() {
                        <Button onClick={() => setPicked(null)} disabled={!picked}>{t("iconPicker.useDefault")}</Button>
                        <Flex gap={8}>
                            <Button onClick={() => TitleBarLook.closePicker()}>{t("Cancel")}</Button>
-                           <Button type="primary" onClick={apply}>{t("iconPicker.apply")}</Button>
+                           <Button type="primary" loading={applying} onClick={apply}>{t("iconPicker.apply")}</Button>
                        </Flex>
                    </Flex>
                }>
@@ -117,6 +139,18 @@ export function IconPickerDialog() {
                     <Button icon={<PictureOutlined/>} onClick={chooseFile}>{t("iconPicker.chooseImage")}</Button>
                     <Typography.Text type="secondary" style={{fontSize: 12}}>{t("iconPicker.imageHint")}</Typography.Text>
                 </Flex>
+                {target === "logo" && menuStatus && (menuStatus.entries.length > 0 ? (
+                    <Flex vertical gap={2}>
+                        <Checkbox checked={menuEntry} onChange={(e) => setMenuEntry(e.target.checked)}>
+                            {t("iconPicker.menuEntry")}
+                        </Checkbox>
+                        <Typography.Text type="secondary" style={{fontSize: 12, paddingLeft: 24}}>
+                            {t("iconPicker.menuEntryHint", {file: menuStatus.entries.map(e => e.split("/").pop()).join(", ")})}
+                        </Typography.Text>
+                    </Flex>
+                ) : (
+                    <Typography.Text type="secondary" style={{fontSize: 12}}>{t("iconPicker.noMenuEntry")}</Typography.Text>
+                ))}
             </Flex>
         </Modal>
     );

@@ -64,6 +64,7 @@ import {defaultSaveLocation} from "@/utils/SaveLocation";
 import {ModSettingsImportDialog} from "@/dialogs/backup/ModSettingsImportDialog";
 import {RestoreBackupDialog} from "@/dialogs/backup/RestoreBackupDialog";
 import {ConnectCloudDialog} from "@/dialogs/backup/ConnectCloudDialog";
+import {KeptCopies, type CopiesInfo} from "@/services/KeptCopies";
 
 function errorText(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -76,6 +77,76 @@ function stamp(): string {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Copies MINTCAT kept of what it replaced (settings files before an import, the database before
+// a restore), with a button to delete them
+
+function KeptCopiesRow({kind, refreshKey}: { kind: "settings" | "database"; refreshKey?: number }) {
+    const [info, setInfo] = React.useState<CopiesInfo | null>();
+    const [deleting, setDeleting] = React.useState(false);
+    const settings = kind === "settings";
+
+    const load = React.useCallback(async () => {
+        try {
+            setInfo(settings ? await KeptCopies.settingsCopies() : await KeptCopies.databaseCopy());
+        } catch (e) {
+            console.warn("[KeptCopies] could not read", e);
+            setInfo(null);
+        }
+    }, [settings]);
+
+    React.useEffect(() => {
+        void load();
+    }, [load, refreshKey]);
+
+    const empty = !info || info.files === 0;
+    const size = info ? formatBytes(info.bytes) : "";
+
+    const onDelete = async () => {
+        if (!info || empty) return;
+        const ok = await MessageBox.confirm({
+            title: t(settings ? "keptCopies.settingsConfirmTitle" : "keptCopies.databaseConfirmTitle"),
+            content: t(settings ? "keptCopies.settingsConfirm" : "keptCopies.databaseConfirm", {files: info.files, size}),
+            okText: t("keptCopies.delete"),
+        });
+        if (!ok) return;
+        setDeleting(true);
+        try {
+            if (settings) await KeptCopies.deleteSettingsCopies();
+            else await KeptCopies.deleteDatabaseCopy();
+            message.success(t("keptCopies.deleted", {size}));
+        } catch (e) {
+            message.error(`${t("keptCopies.deleteFailed")}: ${errorText(e)}`);
+        } finally {
+            setDeleting(false);
+            void load();
+        }
+    };
+
+    return (
+        <Form.Item label={t(settings ? "keptCopies.settingsLabel" : "keptCopies.databaseLabel")}
+                   tooltip={t(settings ? "keptCopies.settingsHelp" : "keptCopies.databaseHelp")}>
+            <Flex align="center" gap={8} wrap>
+                <Typography.Text type={empty ? "secondary" : undefined}>
+                    {info === undefined ? "…"
+                        : empty ? t("keptCopies.none")
+                            : settings ? t("keptCopies.settingsSummary", {count: info!.count, files: info!.files, size})
+                                : size}
+                </Typography.Text>
+                {settings && !empty && (
+                    <Tooltip title={t("keptCopies.openFolder")}>
+                        <Button size="small" icon={<FolderOpenOutlined/>}
+                                onClick={() => void openPath(info!.path).catch(e => message.error(errorText(e)))}/>
+                    </Tooltip>
+                )}
+                <Button size="small" danger icon={<DeleteOutlined/>} disabled={empty} loading={deleting} onClick={onDelete}>
+                    {t("keptCopies.delete")}
+                </Button>
+            </Flex>
+        </Form.Item>
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Mod settings files
 
 export function ModSettingsCard() {
@@ -83,6 +154,7 @@ export function ModSettingsCard() {
     const [files, setFiles] = React.useState<LocalSettingsFile[]>([]);
     const [loading, setLoading] = React.useState(true);
     const [importing, setImporting] = React.useState<{ source: ImportSource; target: string; items: ImportItem[] }>();
+    const [copiesVersion, setCopiesVersion] = React.useState(0);
 
     const refresh = React.useCallback(async () => {
         setLoading(true);
@@ -201,12 +273,16 @@ export function ModSettingsCard() {
                         </Button>
                     </Flex>
                 </Form.Item>
+                <KeptCopiesRow kind="settings" refreshKey={copiesVersion}/>
             </Form>
             {importing && (
                 <ModSettingsImportDialog {...importing}
                                          onClose={(imported) => {
                                              setImporting(undefined);
-                                             if (imported) void refresh();
+                                             if (imported) {
+                                                 void refresh();
+                                                 setCopiesVersion(v => v + 1);
+                                             }
                                          }}/>
             )}
         </Card>
@@ -510,6 +586,7 @@ export function BackupsCard() {
                         <Button icon={<RollbackOutlined/>} onClick={onRestoreFile}>{t("backup.restoreFromFile")}</Button>
                     </Flex>
                 </Form.Item>
+                <KeptCopiesRow kind="database"/>
             </Form>
 
             <Divider style={{margin: "8px 0 12px"}}/>

@@ -22,23 +22,26 @@ export interface ActivityEntry {
 }
 
 const MAX_ENTRIES = 1000;
-const OPEN_KEY = 'mintcat-log-panel-open';
+/** Where earlier builds remembered the panel's open state; the panel now always starts closed */
+const OLD_OPEN_KEY = 'mintcat-log-panel-open';
 export const LOG_PANEL_HEIGHT = 180;
 
 const entries: ActivityEntry[] = [];
 let nextId = 1;
 let unseenProblems = 0;
-let panelOpen = readOpenState();
+// Starts closed on every launch (the Log button shows a red count for new errors and warnings)
+let panelOpen = false;
+forgetOldOpenState();
 let initialized = false;
 const listeners = new Set<() => void>();
 /** Only told about the panel opening/closing (layout), not about new entries */
 const openListeners = new Set<() => void>();
 
-function readOpenState(): boolean {
+function forgetOldOpenState(): void {
     try {
-        return localStorage.getItem(OPEN_KEY) === '1';
+        localStorage.removeItem(OLD_OPEN_KEY);
     } catch {
-        return false;
+        // nothing stored
     }
 }
 
@@ -138,11 +141,6 @@ export const ActivityLog = {
         if (panelOpen === open) return;
         panelOpen = open;
         if (open) unseenProblems = 0;
-        try {
-            localStorage.setItem(OPEN_KEY, open ? '1' : '0');
-        } catch {
-            // per-session only then
-        }
         notify();
         openListeners.forEach(listener => {
             try {

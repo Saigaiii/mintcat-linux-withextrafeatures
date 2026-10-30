@@ -32,6 +32,8 @@ import {FolderColorDialog} from "@/dialogs/FolderColorDialog";
 import {IconPickerDialog} from "@/dialogs/IconPickerDialog";
 import {Backups} from "@/services/Backups";
 import {UsageStats} from "@/services/UsageStats";
+import {TitleBarLook} from "@/services/TitleBarLook";
+import {SystemIcon} from "@/services/SystemIcon";
 
 import {SelectGameDialog} from "@/dialogs/SelectGameDialog";
 import {useKeyboardListener} from "@/hooks/useKeyboardListener.tsx";
@@ -117,6 +119,10 @@ const AppContent = () => {
                 ModListAppearance.init().catch(console.error);
                 Backups.startAuto();
                 UsageStats.start().catch(console.error);
+                // the picked app icon on the window and the app menu entry (again after an update)
+                TitleBarLook.init()
+                    .then(() => SystemIcon.syncAtStart(TitleBarLook.src("logo")))
+                    .catch(console.error);
                 setInitError(null);
                 setIsAppViewModelReady(true);
                 const completed = await DeviceApi.getOnboardingCompleted();

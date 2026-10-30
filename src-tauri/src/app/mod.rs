@@ -1,6 +1,6 @@
 pub mod devtools;
 
-use crate::{backup, control_plane, download, frontend, hot_update, integrator, network};
+use crate::{backup, control_plane, download, frontend, hot_update, integrator, network, system_icon};
 use tauri::{Emitter, Manager, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_sentry::{minidump, sentry};
 
@@ -141,6 +141,10 @@ pub fn run() {
             backup::rclone_run,
             backup::rclone_cancel,
             backup::file_set_mtime,
+            system_icon::system_icon_status,
+            system_icon::system_icon_apply,
+            system_icon::system_icon_restore,
+            system_icon::set_window_icon,
             control_plane::control_plane_invoke,
             hot_update::get_control_plane_status,
             hot_update::get_hot_update_store_manifest,
