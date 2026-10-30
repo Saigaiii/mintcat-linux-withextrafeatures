@@ -263,7 +263,8 @@ export function BackupsCard() {
             for (const pak of paks) pakSize += pak.size;
             setCounts({settings, paks: paks.length, pakSize});
         })();
-    }, []);
+        // counted again after each backup (files may have changed meanwhile)
+    }, [busy]);
 
     const destinationKey = `${cfg.destination}|${cfg.folder}|${cfg.remote}|${cfg.remotePath}`;
     const refreshList = React.useCallback(async () => {
@@ -284,9 +285,10 @@ export function BackupsCard() {
         }
     }, []);
 
+    // also after each backup, wherever it was started (e.g. the title bar's backup button)
     React.useEffect(() => {
-        void refreshList();
-    }, [destinationKey, refreshList]);
+        if (!busy) void refreshList();
+    }, [destinationKey, refreshList, busy]);
 
     const onBrowseFolder = async () => {
         const picked = await open({directory: true, multiple: false, defaultPath: cfg.folder || undefined});

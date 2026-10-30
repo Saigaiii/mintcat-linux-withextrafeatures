@@ -2,12 +2,22 @@ import React from "react";
 import {Card, Flex, Switch, Typography} from "antd";
 import {t} from "i18next";
 import {AdvancedSettings} from "@/services/AdvancedSettings";
+import {AuthResolver} from "@/services/network";
 
 export function useAdvancedShown(): boolean {
     React.useEffect(() => {
         void AdvancedSettings.load();
     }, []);
     return React.useSyncExternalStore(AdvancedSettings.subscribe, AdvancedSettings.isShown);
+}
+
+/** Whether a MINTCAT supporter key is set (User Settings → MintCat), checked when shown */
+export function useMintcatSupporter(): boolean {
+    const [supporter, setSupporter] = React.useState(false);
+    React.useEffect(() => {
+        void new AuthResolver().getMintcatToken().then(token => setSupporter(!!token)).catch(() => undefined);
+    }, []);
+    return supporter;
 }
 
 export function AdvancedSettingsCard() {

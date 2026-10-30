@@ -140,6 +140,7 @@ pub fn run() {
             backup::zip_extract,
             backup::rclone_run,
             backup::rclone_cancel,
+            backup::file_set_mtime,
             control_plane::control_plane_invoke,
             hot_update::get_control_plane_status,
             hot_update::get_hot_update_store_manifest,

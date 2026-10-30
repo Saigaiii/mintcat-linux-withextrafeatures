@@ -22,6 +22,10 @@ import { taskQueueAPI } from "tauri-plugin-task-queue";
 import UserSettingDialog from "../dialogs/UserSettingDialog/index.tsx";
 import { CloudBackupApi } from "@/apis/mintcat";
 import StatusBar from "./StatusBar.tsx";
+import { Backups } from "@/services/Backups";
+import { AdvancedSettings } from "@/services/AdvancedSettings";
+import { AuthResolver } from "@/services/network";
+import { TitleBarLook } from "@/services/TitleBarLook";
 
 
 class TitleBar extends React.Component<any, any> {
@@ -32,6 +36,8 @@ class TitleBar extends React.Component<any, any> {
     private unlistenUserSettingOpen: UnlistenFn | undefined;
     private unlistenModioUnauthorized: UnlistenFn | undefined;
     private unlistenInstallFailedGamePath: UnlistenFn | undefined;
+    private unsubscribeAdvanced: (() => void) | undefined;
+    private unsubscribeLook: (() => void) | undefined;
 
     public constructor(props: any) {
         super(props);
@@ -43,6 +49,8 @@ class TitleBar extends React.Component<any, any> {
             avatarUrl: null,
             cloudBackupLoading: false,
             guidePopoverOpen: false,
+            advanced: AdvancedSettings.isShown(),
+            lookVersion: TitleBarLook.version(),
         };
 
         this.onLaunchGameClick = this.onLaunchGameClick.bind(this);
@@ -125,33 +133,42 @@ class TitleBar extends React.Component<any, any> {
         }
     }
 
+    /**
+     * Back up now: to the destination chosen in Settings → Backups; for MINTCAT supporters who
+     * haven't chosen one, to the MINTCAT cloud backup as before.
+     */
     private async onCloudBackupClick() {
-        // 检查是否已配置云备份
         try {
+            await Backups.load();
+            if (Backups.isReady()) {
+                this.setState({ cloudBackupLoading: true });
+                await StatusBar.info(t("backup.titleBar.running"));
+                await Backups.create();
+                const text = t("backup.titleBar.done", { place: Backups.describeDestination() });
+                await StatusBar.success(text);
+                message.success(text);
+                return;
+            }
+            const supporter = !!(await new AuthResolver().getMintcatToken());
+            if (!supporter) {
+                message.info(t("backup.titleBar.setup"), 6);
+                return;
+            }
             const config = await CloudBackupApi.getConfig();
             if (!config.baseUrl) {
                 message.warning(t("cloudBackup.configureFirst"));
                 return;
             }
-
-            // 开始旋转动画
             this.setState({ cloudBackupLoading: true });
-            
-            // 在状态栏输出开始提示
             await StatusBar.info(t("Cloud backup syncing..."));
-
-            // 执行云备份
             await CloudBackupApi.createBackup();
-
-            // 在状态栏输出完成提示
             await StatusBar.success(t("Cloud backup completed"));
             message.success(t("Cloud backup completed"));
         } catch (error) {
-            console.error("[TitleBar] Cloud backup failed:", error);
+            console.error("[TitleBar] Backup failed:", error);
             await StatusBar.error(t("Cloud backup failed") + `: ${error}`);
-            message.error(t("Cloud backup failed"));
+            message.error(`${t("Cloud backup failed")}: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
-            // 停止旋转动画
             this.setState({ cloudBackupLoading: false });
         }
     }
@@ -164,6 +181,10 @@ class TitleBar extends React.Component<any, any> {
     }
 
     async componentDidMount() {
+        this.unsubscribeAdvanced = AdvancedSettings.subscribe(() => this.setState({ advanced: AdvancedSettings.isShown() }));
+        this.unsubscribeLook = TitleBarLook.subscribe(() => this.setState({ lookVersion: TitleBarLook.version() }));
+        void TitleBarLook.init();
+        void AdvancedSettings.load();
         if (BuildInfo.windowTitle) {
             getCurrentWindow().setTitle(BuildInfo.windowTitle).catch(() => {
                 // keep the default title
@@ -220,6 +241,8 @@ class TitleBar extends React.Component<any, any> {
     }
 
     componentWillUnmount() {
+        this.unsubscribeAdvanced?.();
+        this.unsubscribeLook?.();
         if (this.unlistenActiveGameChange) {
             this.unlistenActiveGameChange();
         }
@@ -241,11 +264,15 @@ class TitleBar extends React.Component<any, any> {
         return (
             <Flex justify={"space-between"}>
                 <Flex gap="middle" wrap>
-                    <Image
-                        width={30}
-                        preview={false}
-                        src="icon.ico"
-                    />
+                    <Tooltip title={t("iconPicker.changeLogo")} mouseEnterDelay={0.8}>
+                        <Image
+                            width={30}
+                            preview={false}
+                            src={TitleBarLook.src("logo", this.state.lookVersion) ?? "icon.ico"}
+                            style={{cursor: "pointer", borderRadius: 6, objectFit: "contain"}}
+                            onClick={() => TitleBarLook.openPicker("logo")}
+                        />
+                    </Tooltip>
                     <h1>
                         <b>
                             <span style={{
@@ -294,7 +321,7 @@ class TitleBar extends React.Component<any, any> {
                         </Space.Compact>
                     </span>
                     <span>
-                        <Tooltip title={t("Cloud Backup")}>
+                        <Tooltip title={t("backup.titleBar.tooltip")}>
                             <Button type={"text"}
                                     icon={this.state.cloudBackupLoading ? <SyncOutlined spin /> : <CloudOutlined />}
                                     onClick={this.onCloudBackupClick}
@@ -302,7 +329,8 @@ class TitleBar extends React.Component<any, any> {
                             />
                         </Tooltip>
                     </span>
-                    <span>
+                    {/* Upstream placeholder with no action yet: only with advanced settings shown */}
+                    {this.state.advanced && <span>
                         <Badge size={"small"}
                                count={0}
                         >
@@ -310,7 +338,7 @@ class TitleBar extends React.Component<any, any> {
                                  icon={<BellOutlined/>}
                          />
                         </Badge>
-                    </span>
+                    </span>}
                     <span>
                     <Popover
                         placement="bottom"
@@ -364,13 +392,18 @@ class TitleBar extends React.Component<any, any> {
                             </Tooltip>
                         </Popover>
                     </span>
-                    <Avatar className={"app-header-avatar tour-step-avatar"}
-                            icon={<UserOutlined/>}
-                            src={this.state.avatarUrl}
-                            onClick={() => {
-                                this.userSettingDialogRef.current?.show();
-                            }}
-                    />
+                    <span onContextMenu={(e) => {
+                        e.preventDefault();
+                        TitleBarLook.openPicker("avatar");
+                    }}>
+                        <Avatar className={"app-header-avatar tour-step-avatar"}
+                                icon={<UserOutlined/>}
+                                src={TitleBarLook.src("avatar", this.state.lookVersion) ?? this.state.avatarUrl}
+                                onClick={() => {
+                                    this.userSettingDialogRef.current?.show();
+                                }}
+                        />
+                    </span>
                 </Flex>
                 <UserSettingDialog ref={this.userSettingDialogRef}/>
             </Flex>

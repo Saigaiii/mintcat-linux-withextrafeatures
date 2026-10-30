@@ -17,8 +17,7 @@ import {appCacheDir, appDataDir, configDir, dirname, join} from "@tauri-apps/api
 import {copyFile, exists, mkdir, readDir, remove, stat} from "@tauri-apps/plugin-fs";
 import {getVersion} from "@tauri-apps/api/app";
 import {StorageAPI} from "@/storage";
-import Database from "@tauri-apps/plugin-sql";
-import {initDb} from "@/storage/db/Client";
+import {initDb, snapshotDatabase} from "@/storage/db/Client";
 import {ModSourceType} from "@/models/mod/types";
 import {BuildInfo} from "@/buildInfo";
 import {localModPath, fileNameOf} from "@/services/LocalModRelocation";
@@ -350,21 +349,8 @@ export const Backups = {
         const work = await join(await appCacheDir(), "backup-work");
         await mkdir(work, {recursive: true});
         const snapshot = await join(work, `db-${Date.now()}.sqlite`);
+        await snapshotDatabase(snapshot);
         const db = await initDb();
-        // A consistent copy of the live database, including changes still in the WAL file
-        await db.execute("VACUUM INTO $1", [snapshot]);
-        // VACUUM INTO writes a rollback-journal database; keep the WAL mode MINTCAT's own uses
-        try {
-            const copy = await Database.load(`sqlite:${snapshot}`);
-            try {
-                await copy.select("PRAGMA journal_mode=WAL");
-            } finally {
-                // close only this database: close() without a name closes MINTCAT's own pool too
-                await copy.close(copy.path);
-            }
-        } catch (e) {
-            console.warn("[Backups] could not set WAL mode on the snapshot (fixed at startup after a restore)", e);
-        }
 
         try {
             const manifest: BackupManifest = {

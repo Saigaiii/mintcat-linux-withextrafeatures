@@ -89,7 +89,10 @@ interface ZipItem {
 
 interface SettingsManifest {
     kind?: string;
+    /** Mod settings export */
     files?: SettingsFile[];
+    /** Full MINTCAT backup */
+    modSettings?: SettingsFile[];
 }
 
 /** Reads a zip made by MINTCAT (mod settings export or full backup) or any zip of SaveGames files */
@@ -104,7 +107,7 @@ export async function readZipSource(path: string): Promise<ImportSource> {
     // MINTCAT backups keep settings under mod-settings/SaveGames/, exports under SaveGames/
     const prefixes = ["mod-settings/" + SETTINGS_ZIP_PREFIX, SETTINGS_ZIP_PREFIX, ""];
     const prefix = prefixes.find(p => p === "" || items.some(i => i.name.startsWith(p))) ?? "";
-    const dates = new Map((manifest.files ?? []).map(f => [f.rel, f.mtime]));
+    const dates = new Map((manifest.files ?? manifest.modSettings ?? []).map(f => [f.rel, f.mtime]));
     const files = items
         .filter(i => i.name.startsWith(prefix) && i.name !== "manifest.json")
         .map(i => {
@@ -143,9 +146,12 @@ export function planImport(source: ImportSource, local: LocalSettingsFile[]): Im
     }).sort((a, b) => a.rel.localeCompare(b.rel));
 }
 
-/** Files that an import would pick by default: new ones and newer ones */
+/**
+ * Files that an import picks by default: new ones and newer ones. "Different" files whose dates
+ * can't be compared are left for the user to tick, so an old copy never silently wins.
+ */
 export function defaultSelection(items: ImportItem[]): string[] {
-    return items.filter(i => i.status === "new" || i.status === "newer" || i.status === "changed").map(i => i.rel);
+    return items.filter(i => i.status === "new" || i.status === "newer").map(i => i.rel);
 }
 
 function stamp(): string {
@@ -179,9 +185,15 @@ export async function applyImport(source: ImportSource, target: string, rels: st
         }
     }
 
+    const copied: { dest: string; mtime: number }[] = [];
     if (source.kind === "zip") {
         const pairs: [string, string][] = [];
-        for (const rel of chosen) pairs.push([source.prefix + rel, await join(target, ...rel.split("/"))]);
+        for (const file of source.files) {
+            if (!chosen.has(file.rel)) continue;
+            const dest = await join(target, ...file.rel.split("/"));
+            pairs.push([source.prefix + file.rel, dest]);
+            copied.push({dest, mtime: file.mtime});
+        }
         await invoke<number>("zip_extract", {path: source.path, files: pairs});
     } else {
         for (const file of source.files) {
@@ -189,7 +201,12 @@ export async function applyImport(source: ImportSource, target: string, rels: st
             const dest = await join(target, ...file.rel.split("/"));
             await mkdir(await dirname(dest), {recursive: true});
             await copyFile(file.path, dest);
+            copied.push({dest, mtime: file.mtime});
         }
+    }
+    // Keep each file's own date, so a later import still compares newer/older correctly
+    for (const {dest, mtime} of copied) {
+        if (mtime > 0) await invoke("file_set_mtime", {path: dest, mtimeMs: Math.round(mtime)}).catch(() => undefined);
     }
     return {count: chosen.size, savedTo};
 }

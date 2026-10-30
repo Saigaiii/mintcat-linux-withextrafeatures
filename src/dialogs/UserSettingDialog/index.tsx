@@ -1,7 +1,7 @@
 import React from "react";
 import {t} from "i18next";
-import {Avatar, Button, Divider, Flex, Input, message, Modal, Tabs, Typography} from "antd";
-import {UserOutlined, LinkOutlined, KeyOutlined, CrownOutlined} from "@ant-design/icons";
+import {Button, Divider, Flex, Input, message, Modal, Tabs, Typography} from "antd";
+import {LinkOutlined, KeyOutlined, CrownOutlined} from "@ant-design/icons";
 import {open as openShell} from "@tauri-apps/plugin-shell";
 
 import {ModioApi} from "@/apis/modio";
@@ -14,6 +14,7 @@ import {IoC} from "@/core/IoC.ts";
 import {AppService} from "@/services/AppService.ts";
 import { autoBind } from "@/utils/ReactUtils";
 import { emitVoidEvent } from "@/events";
+import { ProfilePicture } from "@/dialogs/IconPickerDialog";
 
 const {Text, Title} = Typography;
 
@@ -311,18 +312,6 @@ class UserSettingDialog extends React.Component<any, UserSettingDialogStates> {
     render() {
         const accessKeyTabs = [
             {
-                key: "mintcat",
-                label: "MintCat",
-                children: this.renderAccessKeyTab({
-                    title: t("userSetting.mintcatConfig"),
-                    value: this.state.mintcatOAuth || "",
-                    placeholder: t("userSetting.placeholderMintcatOAuth"),
-                    description: t("userSetting.descMintcatOAuth"),
-                    onChange: this.onMintcatOAuthChange,
-                    onOpen: this.onOpenMintcatClick,
-                }),
-            },
-            {
                 key: "modio",
                 label: "mod.io",
                 children: this.renderAccessKeyTab({
@@ -332,6 +321,18 @@ class UserSettingDialog extends React.Component<any, UserSettingDialogStates> {
                     description: t("userSetting.descModioOAuth"),
                     onChange: this.onOAuthChange,
                     onOpen: this.onOpenModioClick,
+                }),
+            },
+            {
+                key: "mintcat",
+                label: "MintCat",
+                children: this.renderAccessKeyTab({
+                    title: t("userSetting.mintcatConfig"),
+                    value: this.state.mintcatOAuth || "",
+                    placeholder: t("userSetting.placeholderMintcatOAuth"),
+                    description: t("userSetting.descMintcatOAuth"),
+                    onChange: this.onMintcatOAuthChange,
+                    onOpen: this.onOpenMintcatClick,
                 }),
             },
             {
@@ -372,12 +373,9 @@ class UserSettingDialog extends React.Component<any, UserSettingDialogStates> {
                 <Flex vertical gap={24} className="user-settings-root">
                     {/* User Profile Section */}
                     <Flex align="center" gap={20}>
-                        <Avatar 
-                            size={80}
-                            icon={<UserOutlined/>}
-                            src={this.state.profileUrl}
-                            className="user-settings-avatar"
-                        />
+                        <ProfilePicture size={80}
+                                        fallback={this.state.profileUrl}
+                                        className="user-settings-avatar"/>
                         <Flex vertical gap={4}>
                             <Flex align="center" gap={8}>
                                 <Title level={4} className="user-settings-title">

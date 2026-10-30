@@ -238,6 +238,8 @@ export class CacheApi {
     public static async cleanOrphanedPartFiles(): Promise<number> {
         let cleaned = 0;
         try {
+            // On the very first start the cache folder isn't set yet (it's set a moment later)
+            if (!(await (await StorageAPI.getSettings()).getCachePath())) return 0;
             const cacheDirPath = await this.getCacheDir();
             const entries = await readDir(cacheDirPath);
             for (const entry of entries) {

@@ -29,6 +29,7 @@ import {useFileDrop} from "@/hooks/useFileDrop";
 import {ModDescriptions} from "@/services/ModDescriptions";
 import {ModListAppearance} from "@/services/ModListAppearance";
 import {FolderColorDialog} from "@/dialogs/FolderColorDialog";
+import {IconPickerDialog} from "@/dialogs/IconPickerDialog";
 import {Backups} from "@/services/Backups";
 
 import {SelectGameDialog} from "@/dialogs/SelectGameDialog";
@@ -160,6 +161,7 @@ const AppContent = () => {
             <ConfigManageDialog/>
             <MintImportDialog/>
             <FolderColorDialog/>
+            <IconPickerDialog/>
             <SelectGameDialog/>
             <Header className={"app-header"}>
                 <TitleBar/>

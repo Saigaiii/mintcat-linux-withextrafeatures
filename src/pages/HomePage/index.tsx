@@ -365,9 +365,14 @@ export class HomePage extends BasePage<any, ModListPageState> {
         return keys;
     }
 
-    /** 多选时用勾选列表，否则用高亮列表（兼容） */
+    /**
+     * 多选时用勾选列表，否则用高亮列表（兼容）. Only mods the list shows right now: a mod picked
+     * before the search filter hid it is left out, so bulk actions never touch mods you can't see.
+     */
     private getBulkOpKeys(): string[] {
-        return this.state.isMultiSelect ? (this.state.checkedKeys || []) : (this.state.selectedKeys || []);
+        const keys = this.state.isMultiSelect ? (this.state.checkedKeys || []) : (this.state.selectedKeys || []);
+        const shown = new Set(this.getAllLeafKeys(this.state.treeData as DataNode[] | undefined));
+        return keys.map(String).filter(k => !k.startsWith("mod-") || shown.has(k));
     }
 
     private isAllSelected(): boolean {
@@ -401,14 +406,14 @@ export class HomePage extends BasePage<any, ModListPageState> {
     private async onMultiDeleteClick() {
         const vm = await IoC.get(HomeViewModel);
 
+        if (this.getBulkOpKeys().length === 0) {
+            return;
+        }
+
         const confirm = await MessageBox.confirm({
             title: t("Delete Mods"),
             content: t("dialog.confirmDeleteSelectedMods"),
         });
-
-        if (this.getBulkOpKeys().length === 0) {
-            return;
-        }
 
         if (confirm) {
             for (const key of this.getBulkOpKeys()) {
@@ -1684,7 +1689,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                 this.state.isMultiSelect === true &&
                                 <Space size={4} className="mr-auto">
                                     <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-                                        {t("multi.selected", { count: (this.state.checkedKeys ?? []).filter(k => String(k).startsWith("mod-")).length })}
+                                        {t("multi.selected", { count: this.getBulkOpKeys().filter(k => k.startsWith("mod-")).length })}
                                     </Typography.Text>
                                     <Button type="text"
                                             size={"small"}

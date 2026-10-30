@@ -2,8 +2,9 @@ import {t} from "i18next";
 import {openMintImport} from "@/dialogs/MintImportDialog";
 import {ModDescriptions} from "@/services/ModDescriptions";
 import {COLOR_PRESETS, ModListAppearance} from "@/services/ModListAppearance";
+import {TitleBarLook} from "@/services/TitleBarLook";
 import {useAdvancedShown} from "@/pages/SettingPage/AdvancedSettingsCard";
-import {CloudDownloadOutlined, DisconnectOutlined, LinkOutlined, ThunderboltOutlined} from "@ant-design/icons";
+import {CloudDownloadOutlined, DisconnectOutlined, LinkOutlined, ThunderboltOutlined, UserOutlined} from "@ant-design/icons";
 import React from "react";
 import {openPath} from "@tauri-apps/plugin-opener";
 import {open} from "@tauri-apps/plugin-dialog";
@@ -52,6 +53,10 @@ export function MintCatSettings() {
     const lookVersion = React.useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
     const advanced = useAdvancedShown();
     const look = ModListAppearance.get(lookVersion);
+    const titleLookVersion = React.useSyncExternalStore(TitleBarLook.subscribe, TitleBarLook.version);
+    React.useEffect(() => {
+        void TitleBarLook.init();
+    }, []);
     const [clipboardMonitor, setClipboardMonitor] = React.useState<boolean>(true);
     const [compressModPak, setCompressModPak] = React.useState<boolean>(false);
 
@@ -233,6 +238,20 @@ export function MintCatSettings() {
                                     onChange={onThemeChange}/>
                         </Flex>
                     </Form.Item>
+                    <Form.Item label={t("iconPicker.settingLabel")} tooltip={t("help.titleBarIcons")}>
+                        <Flex gap={16} align="center" wrap>
+                            <Button icon={<img src={TitleBarLook.src("logo", titleLookVersion) ?? "icon.ico"} alt="" width={18} height={18} style={{borderRadius: 4, objectFit: "contain"}}/>}
+                                    onClick={() => TitleBarLook.openPicker("logo")}>
+                                {t("iconPicker.appIcon")}
+                            </Button>
+                            <Button icon={TitleBarLook.src("avatar", titleLookVersion)
+                                        ? <img src={TitleBarLook.src("avatar", titleLookVersion)} alt="" width={18} height={18} style={{borderRadius: "50%", objectFit: "cover"}}/>
+                                        : <UserOutlined/>}
+                                    onClick={() => TitleBarLook.openPicker("avatar")}>
+                                {t("iconPicker.profilePicture")}
+                            </Button>
+                        </Flex>
+                    </Form.Item>
                     <Form.Item label={t("Config Directory")} tooltip={t("help.configDir")}>
                         <Flex>
                             <Input value={configDirectory}
@@ -359,11 +378,12 @@ export function MintCatSettings() {
                                     },
                                 ]}/>
                     </Form.Item>
+                    {advanced &&
                     <Form.Item label={t("Compress Mod Pak")} tooltip={t("help.compress")}>
                         <Switch checked={compressModPak}
                                 onChange={onCompressModPakChange}
                         />
-                    </Form.Item>
+                    </Form.Item>}
                     {advanced &&
                     <Form.Item label={t("Dev Tools")} tooltip={t("help.devTools")}>
                         <Button type="dashed"

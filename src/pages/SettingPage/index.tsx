@@ -4,11 +4,18 @@ import {MintCatSettings} from "@/pages/SettingPage/MintCatSettings.tsx";
 import {NetworkSettings} from "@/pages/SettingPage/NetworkSettings.tsx";
 import {CloudBackupSettings} from "@/pages/SettingPage/CloudBackupSettings.tsx";
 import {BackupSettings} from "@/pages/SettingPage/BackupSettings.tsx";
-import {AdvancedSettingsCard, useAdvancedShown} from "@/pages/SettingPage/AdvancedSettingsCard.tsx";
+import {AdvancedSettingsCard, useAdvancedShown, useMintcatSupporter} from "@/pages/SettingPage/AdvancedSettingsCard.tsx";
 
-/** Network settings and the MINTCAT supporters' cloud backup only show with "Show advanced settings" */
+/** Network settings only show with "Show advanced settings" */
 function AdvancedOnly({children}: { children: React.ReactNode }) {
     return useAdvancedShown() ? <>{children}</> : null;
+}
+
+/** The MINTCAT supporters' cloud backup: shown with advanced settings, or always for supporters */
+function MintcatCloudBackup() {
+    const advanced = useAdvancedShown();
+    const supporter = useMintcatSupporter();
+    return advanced || supporter ? <CloudBackupSettings/> : null;
 }
 
 
@@ -36,9 +43,9 @@ export class SettingPage extends BasePage<any, any> {
                 style={{ height: window.innerHeight - 81 - this.logPanelOffset }}>
                 <MintCatSettings/>
                 <BackupSettings/>
+                <MintcatCloudBackup/>
                 <AdvancedOnly>
                     <NetworkSettings/>
-                    <CloudBackupSettings/>
                 </AdvancedOnly>
                 <AdvancedSettingsCard/>
             </div>

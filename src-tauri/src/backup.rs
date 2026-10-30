@@ -158,6 +158,14 @@ pub async fn zip_extract(path: String, files: Vec<(String, String)>) -> Result<u
     .map_err(|e| e.to_string())?
 }
 
+/// Set a file's modification time (ms since 1970), e.g. to keep an imported file's own date.
+#[tauri::command]
+pub fn file_set_mtime(path: String, mtime_ms: u64) -> Result<(), String> {
+    let time = std::time::UNIX_EPOCH + Duration::from_millis(mtime_ms);
+    let file = fs::OpenOptions::new().write(true).open(&path).map_err(|e| format!("{path}: {e}"))?;
+    file.set_modified(time).map_err(|e| format!("{path}: {e}"))
+}
+
 static RUNNING: LazyLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone, Serialize)]
