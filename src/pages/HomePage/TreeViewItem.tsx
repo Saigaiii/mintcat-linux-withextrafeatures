@@ -868,7 +868,7 @@ function ModTreeViewWarring({nodeData, onLocate}: { nodeData: any; onLocate?: ()
 }
 
 
-function ModTreeViewProgressBackground({nodeData, children, ...restProps}) {
+function ModTreeViewProgressBackground({nodeData, children, onRowClick, ...restProps}: any) {
     const [downloadProgress, setDownloadProgress] = useState(() =>
         getCachedDownloadProgress(nodeData.modId, nodeData.downloadProgress)
     );
@@ -903,6 +903,16 @@ function ModTreeViewProgressBackground({nodeData, children, ...restProps}) {
     } : {};
 
     const stopBubble = (e: React.SyntheticEvent) => e.stopPropagation();
+    // Clicks don't reach the tree (see stopBubble); Ctrl/Shift-clicks select mods through onRowClick
+    const onClick = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        onRowClick?.(nodeData.key, e);
+    };
+    const onMouseDown = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        // Shift/Ctrl-click would otherwise select the rows' text
+        if (e.shiftKey || e.ctrlKey || e.metaKey) e.preventDefault();
+    };
 
     return (
         <div style={{
@@ -915,8 +925,8 @@ function ModTreeViewProgressBackground({nodeData, children, ...restProps}) {
             transition: "background 0.3s ease",
             ...progressStyle
         }} {...restProps}
-            onClick={stopBubble}
-            onMouseDown={stopBubble}
+            onClick={onClick}
+            onMouseDown={onMouseDown}
             onFocus={stopBubble}
         >
             {children}
@@ -1070,7 +1080,9 @@ function ModTreeViewTitle({nodeData}) {
             color: enabled &&
             downloadProgress === 100 ? token.colorPrimary : token.colorTextDisabled
         }}
-           onClick={async () => {
+           onClick={async (e) => {
+               // Ctrl/Shift-click selects the mod instead (handled by the row)
+               if (e.ctrlKey || e.metaKey || e.shiftKey) return;
                await open(nodeData.url);
            }}
         >
@@ -1088,6 +1100,8 @@ export interface TreeViewItemProps {
     folders?: FolderInfo[];
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
     itemOrder?: number;
+    /** Click on a mod row (Ctrl/Shift-clicks select mods) */
+    onRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
 }
 
 /**
@@ -1105,6 +1119,7 @@ function TreeViewItemInner({
     folders,
     onMoveToFolder,
     itemOrder,
+    onRowClick,
 }: TreeViewItemProps) {
     const {token} = useToken();
     const describedMod = React.useMemo(() => ({
@@ -1192,7 +1207,7 @@ function TreeViewItemInner({
                               }
                           }
                       }}>
-                <ModTreeViewProgressBackground nodeData={nodeData}>
+                <ModTreeViewProgressBackground nodeData={nodeData} onRowClick={onRowClick}>
   
                 <Tooltip title={t("list.installPositionHint", {position: itemOrder ?? 1})} mouseEnterDelay={0.6}>
                 <span style={{

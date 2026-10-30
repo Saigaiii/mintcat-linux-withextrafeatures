@@ -32,6 +32,7 @@ export interface TreeViewProps {
     onTreeNodeCheck?: (checkedKeys: any) => void;
     onTreeNodeExpand?: (keys: any) => void;
     onTreeRightClick?: (info: any) => void;
+    onTreeRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
     onVirtualStateChange?: (virtual: boolean) => void;
     onModListChange?: () => void;
 }
@@ -305,6 +306,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
                 folders={folders}
                 onMoveToFolder={this.onMoveToFolder}
                 itemOrder={itemOrder}
+                onRowClick={this.props.onTreeRowClick}
             />
         );
     }

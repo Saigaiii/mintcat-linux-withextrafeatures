@@ -872,6 +872,19 @@ export class HomePage extends BasePage<any, ModListPageState> {
         this.setState({ selectedKeys: keys ?? [] });
     }
 
+    /** Mod rows keep plain clicks to themselves; Ctrl/Shift-clicks go to the selection */
+    @autoBind
+    private onTreeRowClick(nodeKey: string, e: React.MouseEvent) {
+        if (e.ctrlKey || e.metaKey || e.shiftKey) {
+            this.onTreeNodeSelect([nodeKey], { node: { key: nodeKey, isLeaf: true }, nativeEvent: e.nativeEvent });
+            return;
+        }
+        this.selectionAnchor = nodeKey;
+        if (this.state.autoMultiSelect) {
+            this.setState({ isMultiSelect: false, autoMultiSelect: false, checkedKeys: [] });
+        }
+    }
+
     /** Folders for the bulk "Move to" menu, with their parents ("Cosmetics / Custom Icons") */
     private getFolderChoices(): { key: string; label: string }[] {
         const out: { key: string; label: string }[] = [];
@@ -1639,6 +1652,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                 onTreeNodeCheck={this.onTreeNodeCheck}
                                 onTreeNodeExpand={this.onTreeNodeExpand}
                                 onTreeRightClick={this.onTreeRightClick}
+                                onTreeRowClick={this.onTreeRowClick}
                                 onVirtualStateChange={(virtual) => {
                                     this.setState({ virtual });
                                 }}
@@ -1655,6 +1669,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
                             {
                                 this.state.isMultiSelect === true &&
                                 <Space size={4} className="mr-auto">
+                                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                                        {t("multi.selected", { count: (this.state.checkedKeys ?? []).filter(k => String(k).startsWith("mod-")).length })}
+                                    </Typography.Text>
                                     <Button type="text"
                                             size={"small"}
                                             icon={this.isAllSelected() ? <MinusSquareOutlined/> : <CheckSquareOutlined/>}
@@ -1667,9 +1684,6 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                             onClick={this.onMultiDeleteClick}>
                                         {t("Delete")}
                                     </Button>
-                                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
-                                        {t("multi.selected", { count: (this.state.checkedKeys ?? []).filter(k => String(k).startsWith("mod-")).length })}
-                                    </Typography.Text>
                                     <Dropdown trigger={["click"]}
                                               menu={{
                                                   items: this.getFolderChoices().map(f => ({ key: f.key, label: f.label, icon: <FolderOutlined/> })),
