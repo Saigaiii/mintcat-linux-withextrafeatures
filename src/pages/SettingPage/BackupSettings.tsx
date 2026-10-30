@@ -60,6 +60,7 @@ import {
     type LocalSettingsFile,
 } from "@/services/ModSettingsFiles";
 import {formatBytes} from "@/dialogs/backup/SettingsFilesTable";
+import {defaultSaveLocation} from "@/utils/SaveLocation";
 import {ModSettingsImportDialog} from "@/dialogs/backup/ModSettingsImportDialog";
 import {RestoreBackupDialog} from "@/dialogs/backup/RestoreBackupDialog";
 import {ConnectCloudDialog} from "@/dialogs/backup/ConnectCloudDialog";
@@ -106,7 +107,7 @@ export function ModSettingsCard() {
 
     const onExport = async () => {
         const dest = await save({
-            defaultPath: `drg-mod-settings_${stamp()}.zip`,
+            defaultPath: await defaultSaveLocation(`drg-mod-settings_${stamp()}.zip`),
             filters: [{name: "Zip", extensions: ["zip"]}],
         });
         if (!dest) return;
@@ -336,7 +337,7 @@ export function BackupsCard() {
     };
 
     const onSaveCopy = async (entry: BackupEntry) => {
-        const target = await save({defaultPath: entry.name, filters: [{name: "Zip", extensions: ["zip"]}]});
+        const target = await save({defaultPath: await defaultSaveLocation(entry.name), filters: [{name: "Zip", extensions: ["zip"]}]});
         if (!target) return;
         setOpening(entry.name);
         try {
@@ -365,7 +366,7 @@ export function BackupsCard() {
     };
 
     const onSaveToFile = async () => {
-        const target = await save({defaultPath: Backups.newBackupName(note.trim() || undefined), filters: [{name: "Zip", extensions: ["zip"]}]});
+        const target = await save({defaultPath: await defaultSaveLocation(Backups.newBackupName(note.trim() || undefined)), filters: [{name: "Zip", extensions: ["zip"]}]});
         if (!target) return;
         try {
             const size = await Backups.writeZip(target, {note: note.trim() || undefined});

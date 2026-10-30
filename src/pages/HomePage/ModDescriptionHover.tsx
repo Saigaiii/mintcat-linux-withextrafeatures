@@ -53,6 +53,14 @@ export function ModDescriptionHover({mod, children}: { mod: DescribedMod; childr
     const repoVersion = useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
     const show = enabled && ModDescriptions.describable(mod, repoVersion);
     const ref = React.useRef<HTMLSpanElement>(null);
+    const [open, setOpen] = React.useState(false);
+    // Right-click (row menu) or a click hides the description until the mouse leaves the name,
+    // so it never covers the menu
+    const suppressed = React.useRef(false);
+    const hide = () => {
+        suppressed.current = true;
+        setOpen(false);
+    };
 
     // The tree puts the mod's name in a title attribute on the row, which the system shows as a
     // second tooltip on top of the description. React only rewrites it when the name changes.
@@ -65,12 +73,20 @@ export function ModDescriptionHover({mod, children}: { mod: DescribedMod; childr
     }
     return (
         <Tooltip title={<DescriptionContent mod={mod}/>}
+                 open={open}
+                 onOpenChange={(next) => setOpen(next && !suppressed.current)}
                  placement="bottomLeft"
                  mouseEnterDelay={0.5}
                  destroyOnHidden
                  styles={{root: {maxWidth: 480}}}>
             {/* the tooltip needs one element that takes mouse events */}
-            <span ref={ref} style={{display: "inline-flex", minWidth: 0}}>{children}</span>
+            <span ref={ref}
+                  style={{display: "inline-flex", minWidth: 0}}
+                  onContextMenu={hide}
+                  onMouseDown={hide}
+                  onMouseLeave={() => {
+                      suppressed.current = false;
+                  }}>{children}</span>
         </Tooltip>
     );
 }

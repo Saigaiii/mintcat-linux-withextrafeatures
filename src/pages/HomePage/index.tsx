@@ -20,7 +20,8 @@ import * as checkbox from "antd/es/checkbox";
 import {openWindow} from "@/dialogs/AddModDialog/open";
 import ProfileEditDialog from "@/dialogs/ProfileEditDialog/index.tsx";
 import {InputDialog} from "@/dialogs/InputDialog.tsx";
-import {TreeViewConverter} from "./TreeViewConverter.ts";
+import {FOLDER_COLOR_PREFIX, TreeViewConverter} from "./TreeViewConverter.ts";
+import {ModListAppearance} from "@/services/ModListAppearance";
 import {TreeViewOutlined} from "@/components/SvgIcon.tsx";
 import {MessageBox} from "@/components/MessageBox.ts";
 import {ModUpdateService} from "@/services/ModUpdateService.ts";
@@ -37,6 +38,7 @@ import {emitEvent, listenEvent, type UnlistenFn} from "@/events";
 import {AddModType} from "@/dialogs/AddModDialog";
 import {SearchBox} from "@/pages/HomePage/SearchBox.tsx";
 import {StorageAPI} from "@/storage";
+import {cleanupRemovedRepositoryMod} from "@/services/RepositoryModCleanup";
 import type {CompleteModData} from "@/storage/dao/ModDAO";
 import type {ProfileData, ProfileModData} from "@/storage/dao/ProfileDAO";
 import type {ProfileTreeItem} from "@/models/profile/ProfileTreeItem";
@@ -62,6 +64,7 @@ import { RepositoryUpdates } from "@/services/RepositoryUpdates";
 import { logActivity } from "@/services/ActivityLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
 import { UpdateReviewDialog } from "@/dialogs/UpdateReviewDialog";
+import { defaultSaveLocation } from "@/utils/SaveLocation";
 import type { UpdateReview } from "@/services/RepositoryUpdates";
 import { openMintImport } from "@/dialogs/MintImportDialog";
 import { ModDescriptions } from "@/services/ModDescriptions";
@@ -237,7 +240,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const findFolderName = (nodes: DataNode[], key: string): string | null => {
             for (const node of nodes) {
                 if (node.key === key && key.toString().startsWith('folder-')) {
-                    return node.title as string;
+                    // a folder being renamed keeps its open state under its new name
+                    return this.pendingFolderRename?.key === key ? this.pendingFolderRename.name : node.title as string;
                 }
                 if (node.children) {
                     const found = findFolderName(node.children as DataNode[], key);
@@ -313,6 +317,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
             }
 
             const path = await save({
+                defaultPath: await defaultSaveLocation(cachePath.split(/[\\/]/).pop() || mod.displayName),
                 filters: [{
                     name: mod.displayName,
                     extensions: ['zip', 'pak'],
@@ -780,6 +785,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
         converter.convertToFromRoot(activeRoot);
+        void ModListAppearance.migrateLegacyKeys(TreeViewConverter.folderColorKeys);
         // Global install positions (folders included) for the row badges and conflict winners
         InstallOrder.set(flattenTreeModIds(activeRoot));
 
@@ -827,7 +833,41 @@ export class HomePage extends BasePage<any, ModListPageState> {
         return keys;
     }
 
+    /** The folder's name and how many mods it and its subfolders hold in the active profile */
+    private async countModsInFolder(folderId: number): Promise<{ name: string; mods: number; modIds: number[] }> {
+        try {
+            const profiles = await StorageAPI.getProfiles();
+            const profile = await profiles.getActiveProfile();
+            const [folders, mods] = await Promise.all([
+                profiles.getProfileFolders(profile.id!),
+                profiles.getProfileMods(profile.id!),
+            ]);
+            const inside = new Set<number>([folderId]);
+            let grew = true;
+            while (grew) {
+                grew = false;
+                for (const folder of folders) {
+                    if (folder.id != null && folder.parentFolderId != null
+                        && inside.has(folder.parentFolderId) && !inside.has(folder.id)) {
+                        inside.add(folder.id);
+                        grew = true;
+                    }
+                }
+            }
+            const modIds = mods
+                .filter(m => m.parentFolderId != null && inside.has(m.parentFolderId))
+                .map(m => m.modId);
+            return {name: folders.find(f => f.id === folderId)?.name ?? "", mods: modIds.length, modIds};
+        } catch (error) {
+            console.warn("[HomePage] could not count the folder's mods", error);
+            // unknown: ask anyway
+            return {name: "", mods: 1, modIds: []};
+        }
+    }
+
     private selectionAnchor?: string;
+    /** A folder being renamed: its open state is looked up under the new name */
+    private pendingFolderRename?: { key: string; name: string };
 
     /**
      * Click: select one row. Ctrl-click: add/remove a mod (or all mods of a folder) from the
@@ -868,7 +908,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 isMultiSelect: true,
                 autoMultiSelect: state.isMultiSelect ? state.autoMultiSelect : true,
                 checkedKeys: [...next],
-                selectedKeys: node.isLeaf ? [key] : state.selectedKeys,
+                // a mod Ctrl-clicked out of the selection doesn't stay highlighted
+                selectedKeys: node.isLeaf ? (next.has(key) ? [key] : []) : state.selectedKeys,
             }));
             return;
         }
@@ -887,10 +928,13 @@ export class HomePage extends BasePage<any, ModListPageState> {
             this.onTreeNodeSelect([nodeKey], { node: { key: nodeKey, isLeaf: true }, nativeEvent: e.nativeEvent });
             return;
         }
+        // A plain click selects this row (the row background stops the tree's own click, so
+        // the tree never sees it); a selection of several made with Ctrl/Shift ends
         this.selectionAnchor = nodeKey;
-        if (this.state.autoMultiSelect) {
-            this.setState({ isMultiSelect: false, autoMultiSelect: false, checkedKeys: [] });
-        }
+        this.setState((state) => ({
+            selectedKeys: [nodeKey],
+            ...(state.autoMultiSelect ? { isMultiSelect: false, autoMultiSelect: false, checkedKeys: [] } : {}),
+        }));
     }
 
     /** Folders for the bulk "Move to" menu, with their parents ("Cosmetics / Custom Icons") */
@@ -1070,6 +1114,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
         converter.convertToFromRoot(activeRoot);
+        void ModListAppearance.migrateLegacyKeys(TreeViewConverter.folderColorKeys);
         // Global install positions (folders included) for the row badges and conflict winners
         InstallOrder.set(flattenTreeModIds(activeRoot));
 
@@ -1241,8 +1286,25 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 break;
             case "delete_group":
                 try {
+                    // Deleting a folder takes the mods in it (and in its subfolders) out of the
+                    // profile; one click in the menu shouldn't do that without asking
+                    const inside = await this.countModsInFolder(id);
+                    if (inside.mods > 0) {
+                        const ok = await MessageBox.confirm({
+                            title: t("Delete Group"),
+                            content: t("group.deleteConfirm", {name: inside.name, count: inside.mods}),
+                            okText: t("group.deleteOk"),
+                        });
+                        if (!ok) break;
+                    }
                     await vm.removeGroup(id);
+                    // like removing the mods one by one: files MINTCAT downloaded for them go too
+                    for (const modId of inside.modIds) {
+                        await cleanupRemovedRepositoryMod(modId);
+                    }
                     shouldUpdateTree = true;
+                    // the enabled/total count at the bottom included the removed mods
+                    shouldUpdateCount = inside.mods > 0;
                 } catch (error) {
                     if (error instanceof LastGroupCannotDeleteError) {
                         message.warning(t("group.cannotDeleteLast"));
@@ -1257,8 +1319,20 @@ export class HomePage extends BasePage<any, ModListPageState> {
                     t("Rename Group"),
                     groupName || "",
                     async (text) => {
+                        // the folder's color follows its new name
+                        const oldColorKey = TreeViewConverter.folderColorKeys[`folder-${id}`];
                         await vm.setGroupName(id, text);
-                        await this.updateTreeView();
+                        if (oldColorKey) {
+                            const parent = oldColorKey.slice(0, Math.max(oldColorKey.lastIndexOf("/"), FOLDER_COLOR_PREFIX.length - 1) + 1);
+                            const newColorKey = (parent.length > FOLDER_COLOR_PREFIX.length ? parent : FOLDER_COLOR_PREFIX) + text;
+                            await ModListAppearance.renameFolderKey(oldColorKey, newColorKey);
+                        }
+                        this.pendingFolderRename = {key: `folder-${id}`, name: text};
+                        try {
+                            await this.updateTreeView();
+                        } finally {
+                            this.pendingFolderRename = undefined;
+                        }
                     }).show();
                 break;
             case "update": {

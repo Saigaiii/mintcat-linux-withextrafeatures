@@ -36,6 +36,8 @@
     "Help Document": "Help Document",
     "Show onboarding again": "Show onboarding again",
     "group.cannotDeleteLast": "Cannot delete the last group. At least one group must remain.",
+    "group.deleteConfirm": "Delete the folder \"{{name}}\" and remove the {{count}} mod(s) in it (subfolders included) from this profile? Your own mod files stay where they are; files MINTCAT downloaded from a repository for these mods are deleted, as when removing them one by one.",
+    "group.deleteOk": "Delete folder",
     "Batch Download": "Batch Download",
     "Batch Download Failed Summary": "Batch Download {{success}}/{{total}} ({{failed}} failed)",
     "Batch Download Friendly": "Batch download started: {{count}} mods, {{concurrency}} at a time",
@@ -938,5 +940,9 @@
     "iconPicker.settingLabel": "Title bar pictures",
     "iconPicker.appIcon": "App icon…",
     "iconPicker.profilePicture": "Profile picture…",
-    "help.titleBarIcons": "The icon next to the MINTCAT name and the profile picture at the top right: pick a built-in icon or any image file. You can also click the app icon, or right-click the profile picture."
+    "help.titleBarIcons": "The icon next to the MINTCAT name and the profile picture at the top right: pick a built-in icon or any image file. You can also click the app icon, or right-click the profile picture.",
+    "Nexus Mods": "Nexus Mods",
+    "usageStats.label": "Usage statistics",
+    "usageStats.restart": "Takes effect after a restart",
+    "help.usageStats": "Lets the MINTCAT developers count app starts and pages opened through umami.is (it records screen size, language, system and country; no mod lists or files). Turned off, nothing is sent."
 }

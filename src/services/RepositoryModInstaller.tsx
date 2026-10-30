@@ -155,9 +155,9 @@ export async function addRepositoryMod(item: SearchResultItem): Promise<void> {
 
     let folders: FolderOption[] = [];
     try {
-        folders = (await new DialogProfileService().getActiveProfileFolders())
-            .filter(f => f.id != null)
-            .map(f => ({id: f.id!, name: f.name}));
+        // in mod-list order, subfolders labelled with their path
+        folders = (await new DialogProfileService().getActiveProfileFolderChoices())
+            .map(f => ({id: f.id, name: f.label}));
     } catch (error) {
         console.warn('[RepositoryModInstaller] could not read folders', error);
     }

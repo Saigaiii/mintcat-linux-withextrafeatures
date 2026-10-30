@@ -127,6 +127,46 @@ export const ModListAppearance = {
         await persist();
     },
 
+    /**
+     * Colors saved by older builds under the folder id ("folder-12") move to the folder's name
+     * path, using the ids of the list as it is now (ids change whenever the list is saved).
+     */
+    async migrateLegacyKeys(idToPath: Record<string, string>): Promise<void> {
+        const folderColors = {...look.folderColors};
+        let changed = false;
+        for (const [key, color] of Object.entries(look.folderColors)) {
+            if (!key.startsWith("folder-")) continue;
+            const path = idToPath[key];
+            if (!path) continue;
+            if (!folderColors[path]) folderColors[path] = color;
+            delete folderColors[key];
+            changed = true;
+        }
+        if (!changed) return;
+        look = {...look, folderColors};
+        notify();
+        await persist();
+    },
+
+    /** A folder was renamed: its color (and its subfolders' colors) follow the new name */
+    async renameFolderKey(oldKey: string, newKey: string): Promise<void> {
+        if (!oldKey || oldKey === newKey) return;
+        const folderColors: Record<string, string> = {};
+        let changed = false;
+        for (const [key, color] of Object.entries(look.folderColors)) {
+            if (key === oldKey || key.startsWith(oldKey + "/")) {
+                folderColors[newKey + key.slice(oldKey.length)] = color;
+                changed = true;
+            } else {
+                folderColors[key] ??= color;
+            }
+        }
+        if (!changed) return;
+        look = {...look, folderColors};
+        notify();
+        await persist();
+    },
+
     async clearFolderColors(): Promise<void> {
         look = {...look, folderColors: {}};
         notify();

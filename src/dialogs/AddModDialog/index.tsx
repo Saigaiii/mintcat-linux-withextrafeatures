@@ -151,12 +151,13 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
 
     @autoBind
     private async loadGroupOptions() {
-        const profileFolderList = await this.dialogProfileService.getActiveProfileFolders();
+        // in mod-list order, subfolders labelled with their path
+        const profileFolderList = await this.dialogProfileService.getActiveProfileFolderChoices();
 
         this.setState({
             groupOptions: profileFolderList.map((item) => {
                 return {
-                    label: item.name,
+                    label: item.label,
                     value: item.id,
                 }
             }),

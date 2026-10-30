@@ -12,6 +12,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 
 import { CloudBackupApi, type CloudBackupRecord } from "@/apis/mintcat";
 import { MessageBox } from "@/components/MessageBox";
+import { defaultSaveLocation } from "@/utils/SaveLocation";
 
 const { Text } = Typography;
 
@@ -99,7 +100,7 @@ export function CloudBackupSettings() {
 
     const onDownload = async (item: CloudBackupRecord) => {
         const target = await save({
-            defaultPath: buildDefaultFileName(item.createdAt),
+            defaultPath: await defaultSaveLocation(buildDefaultFileName(item.createdAt)),
             filters: [
                 { name: "SQLite", extensions: ["sqlite"] },
             ],

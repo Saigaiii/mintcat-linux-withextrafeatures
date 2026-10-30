@@ -5,11 +5,33 @@ import type {CompleteModData} from "@/storage/dao/ModDAO";
 import {StorageAPI} from "@/storage";
 import {autoBind} from "@/utils/ReactUtils";
 import {TreeViewModel} from "./TreeViewModel";
-import {TreeViewConverter} from "./TreeViewConverter";
+import {FOLDER_COLOR_PREFIX, TreeViewConverter} from "./TreeViewConverter";
+import {ModListAppearance} from "@/services/ModListAppearance";
 import {ProfileViewModel} from "@/dialogs/ProfileEditDialog/ProfileViewModel.ts";
 import {TreeViewItem} from "./TreeViewItem";
 import {dragAndDrop} from "./DragAndDropTree";
 import { IoC } from "@/core/IoC";
+
+/** A folder's "Parent/Child" path in a tree, as folder colors are keyed (null when not a folder there) */
+function folderPathOf(nodes: any[] | undefined, key: string, path: string[] = []): string | null {
+    for (const node of nodes ?? []) {
+        if (node.isLeaf) continue;
+        const here = node.key === 'root' ? path : [...path, String(node.title ?? "")];
+        if (node.key === key) return here.join("/");
+        const found = folderPathOf(node.children, key, here);
+        if (found) return found;
+    }
+    return null;
+}
+
+/** A moved folder keeps its color (and its subfolders' colors) at its new place */
+async function carryFolderColors(key: string, before: string | null, treeAfter: any[]): Promise<void> {
+    if (!before) return;
+    const after = folderPathOf(treeAfter, key);
+    if (after && after !== before) {
+        await ModListAppearance.renameFolderKey(FOLDER_COLOR_PREFIX + before, FOLDER_COLOR_PREFIX + after);
+    }
+}
 
 
 export interface FolderInfo {
@@ -85,22 +107,25 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
     private collectFolderList(): FolderInfo[] {
         const folders: FolderInfo[] = [];
         
-        const collectFolders = (nodes: any[]) => {
+        // Subfolders are shown with their path ("Cosmetics / Custom Icons")
+        const collectFolders = (nodes: any[], path: string[]) => {
             for (const node of nodes) {
-                if (!node.isLeaf && node.key !== 'root') {
+                const isFolder = !node.isLeaf && node.key !== 'root';
+                const nodePath = isFolder ? [...path, String(node.title ?? "")] : path;
+                if (isFolder) {
                     folders.push({
                         key: node.key,
-                        title: node.title
+                        title: nodePath.join(" / ")
                     });
                 }
                 if (node.children) {
-                    collectFolders(node.children);
+                    collectFolders(node.children, nodePath);
                 }
             }
         };
 
         if (this.props.treeData) {
-            collectFolders(this.props.treeData as any[]);
+            collectFolders(this.props.treeData as any[], []);
         }
 
         return folders;
@@ -169,6 +194,13 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
             console.error(`[TreeView] Target folder not found: ${targetFolderKey}`);
             return;
         }
+        // A folder can't go into its own subfolder: taking it out would take the target with it,
+        // and the folder and everything in it would drop out of the list
+        const sourceNode = findNode(treeData, sourceKey);
+        if (sourceNode?.children && findNode(sourceNode.children, targetFolderKey)) {
+            console.warn(`[TreeView] Not moving ${sourceKey} into its own subfolder ${targetFolderKey}`);
+            return;
+        }
 
         // 构造一个模拟的拖放事件信息
         const mockInfo = {
@@ -184,6 +216,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
             dropPosition: 0
         };
 
+        const pathBefore = folderPathOf(treeData, sourceKey);
         const dragTreeData = dragAndDrop(mockInfo, treeData);
 
         try {
@@ -194,6 +227,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
             }
 
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
+            await carryFolderColors(sourceKey, pathBefore, dragTreeData);
 
             if (this.props.onModListChange) {
                 this.props.onModListChange();
@@ -239,6 +273,8 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
             };
         }
 
+        const dragKey = String(info.dragNode?.key ?? "");
+        const pathBefore = folderPathOf(treeData, dragKey);
         const dragTreeData = dragAndDrop(info, treeData);
 
         try {
@@ -250,6 +286,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
 
             const profileVM = await IoC.get(ProfileViewModel);
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
+            await carryFolderColors(dragKey, pathBefore, dragTreeData);
 
             if (this.props.onModListChange) {
                 this.props.onModListChange();

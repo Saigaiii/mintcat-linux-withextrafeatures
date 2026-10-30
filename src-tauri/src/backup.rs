@@ -52,12 +52,19 @@ fn safe_archive_name(name: &str) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
+/// `<file>.<suffix>` next to `path` (keeps the whole file name, so two files never share one)
+fn temp_next_to(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.file_name().map(|n| n.to_os_string()).unwrap_or_default();
+    name.push(format!(".{suffix}"));
+    path.with_file_name(name)
+}
+
 fn create_zip(dest: &Path, entries: &[ZipInput]) -> Result<u64, String> {
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let temp = dest.with_extension("zip.part");
-    {
+    let temp = temp_next_to(dest, "part");
+    let written = (|| -> Result<(), String> {
         let file = File::create(&temp).map_err(|e| format!("{}: {e}", temp.display()))?;
         let mut zip = ZipWriter::new(BufWriter::new(file));
         let options = SimpleFileOptions::default()
@@ -74,9 +81,69 @@ fn create_zip(dest: &Path, entries: &[ZipInput]) -> Result<u64, String> {
             }
         }
         zip.finish().map_err(|e| e.to_string())?.flush().map_err(|e| e.to_string())?;
+        Ok(())
+    })();
+    if let Err(e) = written.and_then(|_| fs::rename(&temp, dest).map_err(|e| e.to_string())) {
+        let _ = fs::remove_file(&temp);
+        return Err(e);
     }
-    fs::rename(&temp, dest).map_err(|e| e.to_string())?;
     Ok(fs::metadata(dest).map(|m| m.len()).unwrap_or(0))
+}
+
+fn list_zip(path: &str) -> Result<Vec<ZipItem>, String> {
+    let file = File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let mut items = Vec::with_capacity(archive.len());
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i).map_err(|e| e.to_string())?;
+        if entry.enclosed_name().is_none() {
+            continue;
+        }
+        items.push(ZipItem {
+            name: entry.name().to_string(),
+            size: entry.size(),
+            is_dir: entry.is_dir(),
+        });
+    }
+    Ok(items)
+}
+
+fn read_zip_text(path: &str, name: &str) -> Result<String, String> {
+    let file = File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let mut entry = archive.by_name(name).map_err(|e| e.to_string())?;
+    let mut text = String::new();
+    entry.read_to_string(&mut text).map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+fn extract_zip(path: &str, files: &[(String, String)]) -> Result<u32, String> {
+    let file = File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let mut count = 0;
+    for (name, dest) in files {
+        let mut entry = archive.by_name(name).map_err(|e| format!("{name}: {e}"))?;
+        if entry.enclosed_name().is_none() || entry.is_dir() {
+            return Err(format!("invalid entry: {name}"));
+        }
+        let dest = PathBuf::from(dest);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let temp = temp_next_to(&dest, "mintcat-part");
+        let written = (|| -> Result<(), String> {
+            let mut out = BufWriter::new(File::create(&temp).map_err(|e| format!("{}: {e}", temp.display()))?);
+            io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
+            out.flush().map_err(|e| e.to_string())?;
+            Ok(())
+        })();
+        if let Err(e) = written.and_then(|_| fs::rename(&temp, &dest).map_err(|e| e.to_string())) {
+            let _ = fs::remove_file(&temp);
+            return Err(e);
+        }
+        count += 1;
+    }
+    Ok(count)
 }
 
 /// Write a zip archive (written next to `dest` first, so a failure never leaves half a file).
@@ -90,72 +157,26 @@ pub async fn zip_create(dest: String, entries: Vec<ZipInput>) -> Result<u64, Str
 /// List what a zip archive contains.
 #[tauri::command]
 pub async fn zip_list(path: String) -> Result<Vec<ZipItem>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let file = File::open(&path).map_err(|e| format!("{path}: {e}"))?;
-        let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
-        let mut items = Vec::with_capacity(archive.len());
-        for i in 0..archive.len() {
-            let entry = archive.by_index(i).map_err(|e| e.to_string())?;
-            if entry.enclosed_name().is_none() {
-                continue;
-            }
-            items.push(ZipItem {
-                name: entry.name().to_string(),
-                size: entry.size(),
-                is_dir: entry.is_dir(),
-            });
-        }
-        Ok(items)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || list_zip(&path))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Read one text file (e.g. a manifest) from a zip archive.
 #[tauri::command]
 pub async fn zip_read_text(path: String, name: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let file = File::open(&path).map_err(|e| format!("{path}: {e}"))?;
-        let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
-        let mut entry = archive.by_name(&name).map_err(|e| e.to_string())?;
-        let mut text = String::new();
-        entry.read_to_string(&mut text).map_err(|e| e.to_string())?;
-        Ok(text)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || read_zip_text(&path, &name))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Extract chosen entries of a zip archive. Each pair is (name in archive, destination file);
 /// destinations are written through a temporary file so a failure keeps the old file.
 #[tauri::command]
 pub async fn zip_extract(path: String, files: Vec<(String, String)>) -> Result<u32, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let file = File::open(&path).map_err(|e| format!("{path}: {e}"))?;
-        let mut archive = ZipArchive::new(BufReader::new(file)).map_err(|e| e.to_string())?;
-        let mut count = 0;
-        for (name, dest) in files {
-            let mut entry = archive.by_name(&name).map_err(|e| format!("{name}: {e}"))?;
-            if entry.enclosed_name().is_none() || entry.is_dir() {
-                return Err(format!("invalid entry: {name}"));
-            }
-            let dest = PathBuf::from(dest);
-            if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            let temp = dest.with_extension("mintcat-part");
-            {
-                let mut out = BufWriter::new(File::create(&temp).map_err(|e| format!("{}: {e}", temp.display()))?);
-                io::copy(&mut entry, &mut out).map_err(|e| e.to_string())?;
-                out.flush().map_err(|e| e.to_string())?;
-            }
-            fs::rename(&temp, &dest).map_err(|e| e.to_string())?;
-            count += 1;
-        }
-        Ok(count)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || extract_zip(&path, &files))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Set a file's modification time (ms since 1970), e.g. to keep an imported file's own date.
@@ -276,5 +297,123 @@ pub fn rclone_cancel(run_id: String) -> bool {
     match child {
         Some(child) => child.lock().unwrap().kill().is_ok(),
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mintcat-backup-test-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn input(name: &str, source: Option<&Path>, content: Option<&str>) -> ZipInput {
+        ZipInput {
+            name: name.to_string(),
+            source: source.map(|p| p.display().to_string()),
+            content: content.map(|c| c.to_string()),
+        }
+    }
+
+    #[test]
+    fn archive_names_are_checked() {
+        assert_eq!(safe_archive_name("a/b.sav").unwrap(), "a/b.sav");
+        assert_eq!(safe_archive_name("/a/b.sav").unwrap(), "a/b.sav");
+        assert_eq!(safe_archive_name("a\\b.sav").unwrap(), "a/b.sav");
+        for bad in ["", "/", "../x", "a/../x", "a//b", "a\\..\\b", "a/"] {
+            assert!(safe_archive_name(bad).is_err(), "{bad} should be rejected");
+        }
+    }
+
+    #[test]
+    fn zip_round_trip() {
+        let dir = temp_dir("roundtrip");
+        let src = dir.join("source.sav");
+        fs::write(&src, b"hello settings").unwrap();
+        let big = dir.join("big.pak");
+        fs::write(&big, vec![7u8; 3 * 1024 * 1024]).unwrap();
+        let zip = dir.join("out/backup.zip");
+        let size = create_zip(&zip, &[
+            input("manifest.json", None, Some("{\"kind\":\"x\"}")),
+            input("SaveGames/Mods/A/source.sav", Some(&src), None),
+            input("local-mods/1/big.pak", Some(&big), None),
+        ]).unwrap();
+        assert!(size > 0 && zip.exists());
+        assert!(!temp_next_to(&zip, "part").exists());
+
+        let items = list_zip(&zip.display().to_string()).unwrap();
+        let names: Vec<_> = items.iter().map(|i| i.name.as_str()).collect();
+        assert_eq!(names, ["manifest.json", "SaveGames/Mods/A/source.sav", "local-mods/1/big.pak"]);
+        assert_eq!(items[2].size, 3 * 1024 * 1024);
+        assert_eq!(read_zip_text(&zip.display().to_string(), "manifest.json").unwrap(), "{\"kind\":\"x\"}");
+
+        // extract over an existing file and into a new folder
+        let target = dir.join("game/SaveGames/Mods/A/source.sav");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::write(&target, b"old").unwrap();
+        let other = dir.join("restored/big.pak");
+        let count = extract_zip(&zip.display().to_string(), &[
+            ("SaveGames/Mods/A/source.sav".into(), target.display().to_string()),
+            ("local-mods/1/big.pak".into(), other.display().to_string()),
+        ]).unwrap();
+        assert_eq!(count, 2);
+        assert_eq!(fs::read(&target).unwrap(), b"hello settings");
+        assert_eq!(fs::read(&other).unwrap().len(), 3 * 1024 * 1024);
+        assert!(!temp_next_to(&target, "mintcat-part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_zip_leaves_nothing_behind() {
+        let dir = temp_dir("fail");
+        let zip = dir.join("backup.zip");
+        let missing = dir.join("missing.pak");
+        assert!(create_zip(&zip, &[input("a.pak", Some(&missing), None)]).is_err());
+        assert!(create_zip(&zip, &[input("../evil", None, Some("x"))]).is_err());
+        assert!(!zip.exists());
+        assert!(!temp_next_to(&zip, "part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn failed_extract_keeps_the_old_file() {
+        let dir = temp_dir("extract-fail");
+        let zip = dir.join("b.zip");
+        create_zip(&zip, &[input("a.sav", None, Some("new"))]).unwrap();
+        let target = dir.join("a.sav");
+        fs::write(&target, b"old").unwrap();
+        // the second name doesn't exist: the call fails, the first file was already replaced,
+        // the missing one leaves no temp file and nothing else is touched
+        let result = extract_zip(&zip.display().to_string(), &[
+            ("nope.sav".into(), target.display().to_string()),
+        ]);
+        assert!(result.is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"old");
+        assert!(!temp_next_to(&target, "mintcat-part").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn mtime_is_set() {
+        let dir = temp_dir("mtime");
+        let f = dir.join("x.sav");
+        fs::write(&f, b"x").unwrap();
+        file_set_mtime(f.display().to_string(), 1_790_870_400_000).unwrap();
+        let modified = fs::metadata(&f).unwrap().modified().unwrap();
+        let ms = modified.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
+        assert_eq!(ms, 1_790_870_400_000);
+        assert!(file_set_mtime(dir.join("missing").display().to_string(), 0).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn temp_names_keep_the_whole_file_name() {
+        assert_eq!(temp_next_to(Path::new("/a/b.zip"), "part"), PathBuf::from("/a/b.zip.part"));
+        assert_eq!(temp_next_to(Path::new("/a/Settings"), "mintcat-part"), PathBuf::from("/a/Settings.mintcat-part"));
+        assert_ne!(temp_next_to(Path::new("/a/x.sav"), "p"), temp_next_to(Path::new("/a/x.cfg"), "p"));
     }
 }

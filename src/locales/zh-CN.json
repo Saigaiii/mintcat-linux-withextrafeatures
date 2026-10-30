@@ -36,6 +36,8 @@
 	"Help Document": "帮助文档",
 	"Show onboarding again": "重新查看新手指引",
 	"group.cannotDeleteLast": "无法删除：须至少保留一个分组。",
+	"group.deleteConfirm": "删除文件夹“{{name}}”，并从此配置中移除其中（含子文件夹）的 {{count}} 个模组？你自己的模组文件不会被删除；MINTCAT 为这些模组从仓库下载的文件会被删除（与逐个移除时相同）。",
+	"group.deleteOk": "删除文件夹",
 	"Batch Download": "批量下载",
 	"Batch Download Failed Summary": "批量下载 {{success}}/{{total}}（{{failed}} 个失败）",
 	"Batch Download Friendly": "批量下载中：共 {{count}} 个 Mod，同时下载 {{concurrency}} 个",
@@ -938,5 +940,9 @@
 	"iconPicker.settingLabel": "标题栏图片",
 	"iconPicker.appIcon": "应用图标…",
 	"iconPicker.profilePicture": "头像…",
-	"help.titleBarIcons": "MINTCAT 名称旁的图标和右上角的头像：可选择内置图标或任意图片文件。也可以点击应用图标，或右键点击头像。"
+	"help.titleBarIcons": "MINTCAT 名称旁的图标和右上角的头像：可选择内置图标或任意图片文件。也可以点击应用图标，或右键点击头像。",
+	"Nexus Mods": "Nexus Mods",
+	"usageStats.label": "使用统计",
+	"usageStats.restart": "重启后生效",
+	"help.usageStats": "允许 MINTCAT 开发者通过 umami.is 统计应用启动次数和打开的页面（会记录屏幕尺寸、语言、系统和国家/地区；不包含模组列表或文件）。关闭后不发送任何数据。"
 }

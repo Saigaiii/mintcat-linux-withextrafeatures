@@ -3,6 +3,7 @@ import {openMintImport} from "@/dialogs/MintImportDialog";
 import {ModDescriptions} from "@/services/ModDescriptions";
 import {COLOR_PRESETS, ModListAppearance} from "@/services/ModListAppearance";
 import {TitleBarLook} from "@/services/TitleBarLook";
+import {USAGE_STATS_DEFAULT, UsageStats} from "@/services/UsageStats";
 import {useAdvancedShown} from "@/pages/SettingPage/AdvancedSettingsCard";
 import {CloudDownloadOutlined, DisconnectOutlined, LinkOutlined, ThunderboltOutlined, UserOutlined} from "@ant-design/icons";
 import React from "react";
@@ -54,6 +55,10 @@ export function MintCatSettings() {
     const advanced = useAdvancedShown();
     const look = ModListAppearance.get(lookVersion);
     const titleLookVersion = React.useSyncExternalStore(TitleBarLook.subscribe, TitleBarLook.version);
+    const [usageStats, setUsageStats] = React.useState(USAGE_STATS_DEFAULT);
+    React.useEffect(() => {
+        void UsageStats.isEnabled().then(setUsageStats);
+    }, []);
     React.useEffect(() => {
         void TitleBarLook.init();
     }, []);
@@ -302,6 +307,16 @@ export function MintCatSettings() {
                         <Switch checked={clipboardMonitor}
                                 onChange={onClipboardMonitorChange}
                         />
+                    </Form.Item>
+                    <Form.Item label={t("usageStats.label")} tooltip={t("help.usageStats")}>
+                        <Flex gap={8} align="center">
+                            <Switch checked={usageStats}
+                                    onChange={(checked) => {
+                                        setUsageStats(checked);
+                                        void UsageStats.setEnabled(checked);
+                                    }}/>
+                            <Typography.Text type="secondary" style={{fontSize: 12}}>{t("usageStats.restart")}</Typography.Text>
+                        </Flex>
                     </Form.Item>
                 </Form>
             </Card>

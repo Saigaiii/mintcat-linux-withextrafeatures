@@ -13,6 +13,7 @@ const defaultFilterOptionDefinitions = [
             {value: "source:Local", labelKey: "Local"},
             {value: "source:Modio", labelKey: "Modio"},
             {value: "source:modcat", labelKey: "ModCat"},
+            {value: "source:nexusmods", labelKey: "Nexus Mods"},
         ],
     },
     {
@@ -173,7 +174,9 @@ export const SearchBox = ({ onUpdateTreeView }: SearchBoxProps) => {
                 suffixIcon={<SearchOutlined/>}
                 notFoundContent={null}
                 defaultActiveFirstOption={false}
-                showSearch={{ onSearch, filterOption: false }}
+                // the typed text is kept here so Esc really empties the box (the Select's own copy
+                // stayed hidden and the next letters were added to it)
+                showSearch={{ searchValue: searchKeyword, onSearch, filterOption: false }}
                 allowClear={true}
                 mode={"multiple"}
         />

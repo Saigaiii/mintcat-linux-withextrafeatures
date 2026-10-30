@@ -31,6 +31,7 @@ import {ModListAppearance} from "@/services/ModListAppearance";
 import {FolderColorDialog} from "@/dialogs/FolderColorDialog";
 import {IconPickerDialog} from "@/dialogs/IconPickerDialog";
 import {Backups} from "@/services/Backups";
+import {UsageStats} from "@/services/UsageStats";
 
 import {SelectGameDialog} from "@/dialogs/SelectGameDialog";
 import {useKeyboardListener} from "@/hooks/useKeyboardListener.tsx";
@@ -115,6 +116,7 @@ const AppContent = () => {
                 ModDescriptions.init().catch(console.error);
                 ModListAppearance.init().catch(console.error);
                 Backups.startAuto();
+                UsageStats.start().catch(console.error);
                 setInitError(null);
                 setIsAppViewModelReady(true);
                 const completed = await DeviceApi.getOnboardingCompleted();

@@ -17,9 +17,14 @@ const TAG_FILTERS = new Set(["RequiredByAll", "Optional", "Audio", "Framework", 
  *
  * Note: 这是一个纯粹的数据转换器，不包含业务逻辑
  */
+export const FOLDER_COLOR_PREFIX = "path:";
+
 export class TreeViewConverter {
 
     public static filterList?: string[] = [];
+
+    /** Folder key ("folder-<id>") → folder color key, from the last list built */
+    public static folderColorKeys: Record<string, string> = {};
 
     public treeData?: TreeProps['treeData'] = []
     public expandedKeys?: TreeProps['expandedKeys'] = [];
@@ -86,6 +91,7 @@ export class TreeViewConverter {
      * 将 ProfileTreeItem root 转换为 AntD TreeView 格式
      */
     public convertToFromRoot(root: ProfileTreeItem): TreeProps['treeData'] {
+        TreeViewConverter.folderColorKeys = {};
         const treeRoot = {
             key: "root",
             isLeaf: false,
@@ -152,7 +158,7 @@ export class TreeViewConverter {
             onlineUpdateDate: modItem.status?.onlineUpdateDate || 0,
             onlineAvailable: modItem.status?.isOnlineAvailable ?? true,
             localNoFound: modItem.status?.isLocalNotFound ?? false,
-            // Keys of the folders this mod is in, outermost first (for folder colors)
+            // Color keys of the folders this mod is in, outermost first (for folder colors)
             folderPath,
         });
     }
@@ -164,15 +170,22 @@ export class TreeViewConverter {
         const key = `folder-${item.id}`;
         this.expandedKeys.push(key);
 
+        // Folder colors are stored by the folder's name path ("Cosmetics/Custom Icons"): saving
+        // the list re-creates folders with new ids, so ids can't be used
+        const parentPath = folderPath.length ? folderPath[folderPath.length - 1].slice(FOLDER_COLOR_PREFIX.length) : "";
+        const colorKey = FOLDER_COLOR_PREFIX + (parentPath ? `${parentPath}/${item.name}` : item.name);
+        TreeViewConverter.folderColorKeys[key] = colorKey;
+
         const node = {
             key,
             title: item.name,
             isLeaf: false,
+            colorKey,
             children: [],
         }
 
         parent.children.push(node);
-        this.buildTreeNode(node, item, [...folderPath, key]); // 递归处理子节点
+        this.buildTreeNode(node, item, [...folderPath, colorKey]); // 递归处理子节点
     }
 
     // ====================================

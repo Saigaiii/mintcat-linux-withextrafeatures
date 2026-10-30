@@ -193,10 +193,27 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
 }) {
     const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
-    const folderColor = ModListAppearance.folderColor(nodeData.key, lookVersion);
-    // 过滤掉当前文件夹，避免移动到自身
+    const colorKey: string = nodeData.colorKey ?? nodeData.key;
+    const folderColor = ModListAppearance.folderColor(colorKey, lookVersion);
+    // The tree also puts the folder's name in a title attribute, which the system shows as a
+    // tooltip on top of the folder's right-click menu. The name is already on the row.
+    const rowRef = React.useRef<HTMLSpanElement>(null);
+    React.useLayoutEffect(() => {
+        rowRef.current?.closest(".ant-tree-node-content-wrapper")?.removeAttribute("title");
+    });
+    // 过滤掉当前文件夹，避免移动到自身 (and its subfolders: a folder can't go inside itself)
+    const ownSubfolders = new Set<string>();
+    const collectSubfolders = (nodes: any[] | undefined) => {
+        for (const child of nodes ?? []) {
+            if (!child.isLeaf) {
+                ownSubfolders.add(String(child.key));
+                collectSubfolders(child.children);
+            }
+        }
+    };
+    collectSubfolders(nodeData.children);
     const moveToChildren: MenuProps['items'] = folders
-        ?.filter(f => f.key !== nodeData.key)
+        ?.filter(f => f.key !== nodeData.key && !ownSubfolders.has(String(f.key)))
         .map(f => ({
             key: `move_to_${f.key}`,
             label: f.title,
@@ -228,13 +245,13 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
                               const targetFolderKey = e.key.replace('move_to_', '');
                               onMoveToFolder?.(nodeData.key, targetFolderKey);
                           } else if (e.key === 'folder_color') {
-                              ModListAppearance.openFolderColor(nodeData.key, String(nodeData.title ?? ""));
+                              ModListAppearance.openFolderColor(colorKey, String(nodeData.title ?? ""));
                           } else {
                               onMenuClick(e.key, nodeData.key);
                           }
                       }
                   }}>
-                    <span style={{
+                    <span ref={rowRef} style={{
                         width: "100%",
                         display: "block",
                         paddingLeft: "6px",
@@ -875,7 +892,7 @@ function ModTreeViewWarring({nodeData, onLocate}: { nodeData: any; onLocate?: ()
 }
 
 
-function ModTreeViewProgressBackground({nodeData, children, onRowClick, ...restProps}: any) {
+function ModTreeViewProgressBackground({nodeData, children, onRowClick, ref: outerRef, ...restProps}: any) {
     // Mods in a colored folder (or a subfolder of one) get a stripe of its color
     const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
     const folderColor = ModListAppearance.colorForPath(nodeData.folderPath, lookVersion);
@@ -901,6 +918,19 @@ function ModTreeViewProgressBackground({nodeData, children, onRowClick, ...restP
 
     const isDownloading = downloadProgress !== 100;
 
+    // The tree repeats the mod's name in a title attribute on the row, which the system shows as
+    // a second tooltip over the row's own tooltips and menu
+    const rowRef = React.useRef<HTMLDivElement | null>(null);
+    React.useLayoutEffect(() => {
+        rowRef.current?.closest(".ant-tree-node-content-wrapper")?.removeAttribute("title");
+    });
+    // the row menu (Dropdown) may pass its own ref, which has to reach the element too
+    const setRowRef = (el: HTMLDivElement | null) => {
+        rowRef.current = el;
+        if (typeof outerRef === "function") outerRef(el);
+        else if (outerRef) outerRef.current = el;
+    };
+
     // 渐变背景样式：从左到右的进度色块
     const progressStyle: React.CSSProperties = isDownloading ? {
         background: `linear-gradient(
@@ -925,7 +955,7 @@ function ModTreeViewProgressBackground({nodeData, children, onRowClick, ...restP
     };
 
     return (
-        <div style={{
+        <div ref={setRowRef} style={{
             width: "100%",
             boxSizing: "border-box",
             display: "flex",

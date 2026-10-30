@@ -512,10 +512,18 @@ export const Backups = {
 
     async readManifest(zipPath: string): Promise<BackupManifest> {
         let manifest: BackupManifest;
+        let text: string;
         try {
-            manifest = JSON.parse(await invoke<string>("zip_read_text", {path: zipPath, name: "manifest.json"}));
+            text = await invoke<string>("zip_read_text", {path: zipPath, name: "manifest.json"});
+        } catch (e) {
+            // a readable zip without a manifest vs. a file that can't be opened as a zip
+            if (/not found in archive/i.test(errorText(e))) throw new Error("This zip isn't a MINTCAT backup (no manifest.json).");
+            throw new Error(errorText(e));
+        }
+        try {
+            manifest = JSON.parse(text);
         } catch {
-            throw new Error("This zip isn't a MINTCAT backup (no manifest.json).");
+            throw new Error("This zip isn't a MINTCAT backup (its manifest.json can't be read).");
         }
         if (manifest.kind !== "mintcat-backup") throw new Error("This zip isn't a MINTCAT backup.");
         return manifest;

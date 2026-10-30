@@ -547,3 +547,38 @@ fn string_to_c(value: String) -> CString {
         CString::new(bytes).expect("nul bytes were removed")
     })
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod game_check_tests {
+    use super::check_steam_game;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Child, Command};
+    use std::time::Duration;
+
+    /// A process whose command line looks like `title` (sleep with a different argv[0])
+    fn fake_process(title: &str) -> Child {
+        let child = Command::new("sleep").arg0(title).arg("30").spawn().unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+        child
+    }
+
+    #[test]
+    fn finds_the_game_but_not_programs_in_its_folder() {
+        // a file manager / editor with a path through the game's FSD folder is not the game
+        let mut editor = fake_process("nano /games/Deep Rock Galactic/FSD/Saved/SaveGames/x.sav");
+        assert!(!check_steam_game("FSD.exe".to_string()), "a path through FSD/ must not count");
+        editor.kill().unwrap();
+        let _ = editor.wait();
+
+        // the Proton launcher and the shipping exe both count
+        for title in [
+            "Z:\\games\\Deep Rock Galactic\\FSD.exe",
+            "/games/Deep Rock Galactic/FSD/Binaries/Win64/FSD-Win64-Shipping.exe",
+        ] {
+            let mut game = fake_process(title);
+            assert!(check_steam_game("FSD.exe".to_string()), "{title} should count as the game");
+            game.kill().unwrap();
+            let _ = game.wait();
+        }
+    }
+}
