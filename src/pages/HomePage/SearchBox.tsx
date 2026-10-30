@@ -112,14 +112,21 @@ export const SearchBox = ({ onUpdateTreeView }: SearchBoxProps) => {
         return customOptions.length ? [...customOptions, ...defaultFilterOptions] : defaultFilterOptions;
     }, [defaultFilterOptions, searchKeyword, searchValue, t]);
 
+    // Typing filters as you go (shortly after the last key), together with the chips already picked
+    const typingTimer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+    React.useEffect(() => () => clearTimeout(typingTimer.current), []);
+
     const onSearch = (newValue: string) => {
         setSearchKeyword(newValue);
-        TreeViewConverter.filterList = newValue ? [newValue] : [];
-        onUpdateTreeView();
+        const keyword = newValue.trim();
+        TreeViewConverter.filterList = [...(searchValue ?? []), ...(keyword ? [keyword] : [])];
+        clearTimeout(typingTimer.current);
+        typingTimer.current = setTimeout(() => onUpdateTreeView(), 200);
     }
 
     const onSearchSelectChange = (value: string[]) => {
         const nextValue = value.length ? value : undefined;
+        clearTimeout(typingTimer.current);
         TreeViewConverter.filterList = nextValue ?? [];
         setSearchKeyword("");
         setSearchValue(nextValue);
@@ -139,6 +146,7 @@ export const SearchBox = ({ onUpdateTreeView }: SearchBoxProps) => {
                 onChange={onSearchSelectChange}
                 onBlur={onBlur}
                 className="w-300"
+                placeholder={t("modSearch.placeholder")}
                 suffixIcon={<SearchOutlined/>}
                 notFoundContent={null}
                 defaultActiveFirstOption={false}

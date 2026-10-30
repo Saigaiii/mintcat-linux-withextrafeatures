@@ -1,5 +1,6 @@
 import {t} from "i18next";
 import {openMintImport} from "@/dialogs/MintImportDialog";
+import {ModDescriptions} from "@/services/ModDescriptions";
 import React from "react";
 import {openPath} from "@tauri-apps/plugin-opener";
 import {open} from "@tauri-apps/plugin-dialog";
@@ -44,6 +45,7 @@ export function MintCatSettings() {
     const [cacheDirectory, setCacheDirectory] = React.useState<string>("");
     const [ue4ss, setUe4ss] = React.useState<Ue4ssSetting>(UE4SS_SETTING_ENABLED);
     const [releaseChannel, setReleaseChannel] = React.useState<ReleaseChannel>(DEFAULT_RELEASE_CHANNEL);
+    const descriptionHover = React.useSyncExternalStore(ModDescriptions.subscribe, ModDescriptions.isEnabled);
     const [clipboardMonitor, setClipboardMonitor] = React.useState<boolean>(true);
     const [compressModPak, setCompressModPak] = React.useState<boolean>(false);
 
@@ -225,7 +227,7 @@ export function MintCatSettings() {
                                     onChange={onThemeChange}/>
                         </Flex>
                     </Form.Item>
-                    <Form.Item label={t("Config Directory")}>
+                    <Form.Item label={t("Config Directory")} tooltip={t("help.configDir")}>
                         <Flex>
                             <Input value={configDirectory}
                                    disabled/>
@@ -236,21 +238,21 @@ export function MintCatSettings() {
                             </Button>
                         </Flex>
                     </Form.Item>
-                    <Form.Item label={t("Import Config")}>
+                    <Form.Item label={t("Import Config")} tooltip={t("help.importConfig")}>
                         <Button type="dashed"
                                 {...ButtonLayout}
                                 onClick={onImportConfigClick}>
                             {t("Open")}
                         </Button>
                     </Form.Item>
-                    <Form.Item label={t("mintImport.settingsLabel")}>
+                    <Form.Item label={t("mintImport.settingsLabel")} tooltip={t("help.mintImport")}>
                         <Button type="dashed"
                                 {...ButtonLayout}
                                 onClick={() => openMintImport()}>
                             {t("mintImport.choose")}
                         </Button>
                     </Form.Item>
-                    <Form.Item label={t("Cache Directory")}>
+                    <Form.Item label={t("Cache Directory")} tooltip={t("help.cacheDir")}>
                         <Flex>
                             <Search value={cacheDirectory}
                                     enterButton={<FolderAddOutlined/>}
@@ -263,7 +265,7 @@ export function MintCatSettings() {
                             </Button>
                         </Flex>
                     </Form.Item>
-                    <Form.Item label={t("Clear Current Cache")}>
+                    <Form.Item label={t("Clear Current Cache")} tooltip={t("help.clearCache")}>
                         <Button type="dashed"
                                 danger
                                 {...ButtonLayout}
@@ -271,9 +273,16 @@ export function MintCatSettings() {
                             {t("Clean")}
                         </Button>
                     </Form.Item>
-                    <Form.Item label={t("Clipboard Monitor")}>
+                    <Form.Item label={t("Clipboard Monitor")} tooltip={t("help.clipboard")}>
                         <Switch checked={clipboardMonitor}
                                 onChange={onClipboardMonitorChange}
+                        />
+                    </Form.Item>
+                    <Form.Item label={t("modDescription.setting")} tooltip={t("help.descriptionHover")}>
+                        <Switch checked={descriptionHover}
+                                onChange={(checked) => {
+                                    void ModDescriptions.setEnabled(checked);
+                                }}
                         />
                     </Form.Item>
                 </Form>
@@ -282,7 +291,7 @@ export function MintCatSettings() {
                   style={{marginBottom: "10px"}}
             >
                 <Form {...SettingLayout}>
-                    <Form.Item label={t("Release channel")}>
+                    <Form.Item label={t("Release channel")} tooltip={t("help.releaseChannel")}>
                         <Flex>
                             <Select value={releaseChannel}
                                     options={releaseChannelOptions}
@@ -290,7 +299,7 @@ export function MintCatSettings() {
                             />
                         </Flex>
                     </Form.Item>
-                    <Form.Item label={t("UE4SS")}>
+                    <Form.Item label={t("UE4SS")} tooltip={t("help.ue4ss")}>
                         <Select<Ue4ssSetting> onChange={onUe4ssChange}
                                 value={ue4ss}
                                 options={[
@@ -304,12 +313,12 @@ export function MintCatSettings() {
                                     },
                                 ]}/>
                     </Form.Item>
-                    <Form.Item label={t("Compress Mod Pak")}>
+                    <Form.Item label={t("Compress Mod Pak")} tooltip={t("help.compress")}>
                         <Switch checked={compressModPak}
                                 onChange={onCompressModPakChange}
                         />
                     </Form.Item>
-                    <Form.Item label={t("Dev Tools")}>
+                    <Form.Item label={t("Dev Tools")} tooltip={t("help.devTools")}>
                         <Button type="dashed"
                                 {...ButtonLayout}
                                 onClick={onDevToolsClick}>

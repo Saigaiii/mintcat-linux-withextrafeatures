@@ -162,6 +162,9 @@ export function CloudBackupSettings() {
 
     return (
         <Card title={t("Cloud Backup")} style={{ marginBottom: "10px" }}>
+            <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
+                {t("cloudBackup.help")}
+            </Typography.Paragraph>
             <Space.Compact style={{ width: "100%", marginBottom: 16 }}>
                 <Input
                     value={note}

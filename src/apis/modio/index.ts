@@ -233,6 +233,26 @@ export class ModioApi {
     }
 
     /**
+     * Mod infos for these mod.io ids, 100 per request. Errors go to the caller without a toast
+     * (used for background work such as hover descriptions).
+     */
+    public static async getModInfoByIdListQuiet(modIds: number[]): Promise<ModInfo[]> {
+        const results: ModInfo[] = [];
+        for (let i = 0; i < modIds.length; i += 100) {
+            const batch = modIds.slice(i, i + 100);
+            const data = await ModioApi.getRequest(`/games/${MODIO_GAME_ID}/mods?id-in=${batch.join(",")}&_limit=100`);
+            results.push(...((data?.data ?? []) as ModInfo[]));
+        }
+        return results;
+    }
+
+    /** Like getModInfoByName, without a toast on errors */
+    public static async getModInfoByNameQuiet(nameId: string): Promise<ModInfo | undefined> {
+        const data = await ModioApi.getRequest(`/games/${MODIO_GAME_ID}/mods?name_id=${encodeURIComponent(nameId)}`);
+        return (data?.data ?? [])[0];
+    }
+
+    /**
      * 获取单个 mod 的标签（Get Mod Tags）
      * 列表接口可能不返回 tags，一键更新时需单独拉取以刷新标签
      * @see https://docs.mod.io/restapi/docs/get-mod-tags

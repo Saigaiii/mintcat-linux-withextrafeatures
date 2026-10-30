@@ -62,6 +62,7 @@ import { RepositoryUpdates } from "@/services/RepositoryUpdates";
 import { logActivity } from "@/services/ActivityLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
 import { openMintImport } from "@/dialogs/MintImportDialog";
+import { ModDescriptions } from "@/services/ModDescriptions";
 import { ConflictService } from "@/services/ConflictService";
 import { ConflictReport } from "@/components/ConflictDetails";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
@@ -94,7 +95,8 @@ interface ModListPageState {
 /** Everything the list is built from; equal strings mean the same rows */
 function treeSignature(profileId: number | undefined, root: ProfileTreeItem, profileMods: ProfileModData[], mods: CompleteModData[]): string {
     try {
-        return JSON.stringify([i18next.language, profileId, root, profileMods, mods]);
+        // The search box's filter changes what the list shows, so it is part of the signature too
+        return JSON.stringify([i18next.language, profileId, TreeViewConverter.filterList ?? [], root, profileMods, mods]);
     } catch {
         return String(Math.random());
     }
@@ -873,6 +875,11 @@ export class HomePage extends BasePage<any, ModListPageState> {
             return;
         }
         this.lastTreeSignature = signature;
+        // Hover descriptions (when turned on): load the list's mod.io descriptions in a few requests
+        const inProfile = new Set(profileMods.map(pm => pm.modId));
+        ModDescriptions.prefetch(allMods
+            .filter(m => inProfile.has(m.modId!))
+            .map(m => ({modId: m.modId!, platformId: m.platformId, nameId: m.nameId, sourceType: m.sourceType, url: m.url})));
 
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);

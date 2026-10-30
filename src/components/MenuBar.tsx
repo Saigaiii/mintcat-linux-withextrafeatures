@@ -26,10 +26,10 @@ class MenuBar extends React.Component<MenuBarProps, any> {
         {
             key: MenuPage.Home,
             icon: <HomeOutlined/>,
-            label: t("Home"),
+            label: t("menu.modList"),
             className: 'tour-step-home',
         },
-        {key: MenuPage.Modio, icon: <ModioOutlined/>, label: 'mod.io', className: 'tour-step-modio'},
+        {key: MenuPage.Modio, icon: <ModioOutlined/>, label: t("menu.browse"), className: 'tour-step-modio'},
         // {key: MenuPage.Accelerator, icon: <ThunderboltOutlined/>, label: t('Accelerator')},
         {key: MenuPage.Setting, icon: <SettingOutlined/>, label: t("Settings"), className: 'tour-step-setting'},
     ];
@@ -43,9 +43,11 @@ class MenuBar extends React.Component<MenuBarProps, any> {
             <Menu
                 selectedKeys={[this.props.activeKey]}
                 mode="inline"
+                // Collapsed: only the icons show, and each one names its page on hover
+                inlineCollapsed={true}
                 inlineIndent={14}
                 items={this.items}
-                style={{backgroundColor: 'transparent', height: '100%'}}
+                style={{backgroundColor: 'transparent', height: '100%', width: '100%'}}
                 onClick={({key}) => {
                     this.props.onClick(key);
                 }}

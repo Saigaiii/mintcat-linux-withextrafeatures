@@ -3,6 +3,10 @@ import {ProfileTreeItem, ProfileTreeType} from "@/storage/db/Schema.ts";
 import type {CompleteModData} from "@/storage/dao/ModDAO";
 import type {ProfileModData} from "@/storage/dao/ProfileDAO";
 
+/** Values of the search box's fixed "Status" and "Tags" choices (see SearchBox) */
+const APPROVAL_FILTERS = new Set(["Verified", "Approved", "Sandbox"]);
+const TAG_FILTERS = new Set(["RequiredByAll", "Optional", "Audio", "Framework", "Tools", "QoL", "Visual", "Gameplay"]);
+
 /**
  * TreeViewConverter
  *
@@ -33,43 +37,45 @@ export class TreeViewConverter {
 
     /**
      * 根据当前过滤器列表过滤 mod
+     *
+     * Picks from the same group (e.g. Local + mod.io) widen the result; different groups and
+     * typed words narrow it, so "mod.io" + "Enable" + "unified" finds enabled mod.io mods whose
+     * name contains "unified". A typed word matches the name, the mod.io name id, a tag or the
+     * approval status (case-insensitive).
      */
     public static filter(modItem: CompleteModData, isEnabled: boolean): boolean {
-        const filterList = TreeViewConverter.filterList ?? [];
+        const filterList = (TreeViewConverter.filterList ?? []).filter(f => f && f !== "All");
         if (filterList.length === 0) {
             return true;
         }
 
-        for (let filter of filterList) {
-            if (filter === "All") {
-                return true;
-            }
-            // 处理来源类型筛选
-            if (filter.startsWith("source:")) {
-                const sourceType = filter.substring(7); // 去掉 "source:" 前缀
-                if (modItem.sourceType === sourceType) {
-                    return true;
-                }
-                continue;
-            }
-            if (filter.startsWith("enabled:")) {
-                const enabled = filter === "enabled:true";
-                if (isEnabled === enabled) {
-                    return true;
-                }
-                continue;
-            }
-            if (modItem.displayName?.toLocaleLowerCase().indexOf(filter.toLocaleLowerCase()) > -1) {
-                return true;
-            }
-            if (modItem.approvalStatus === filter) {
-                return true;
-            }
-            if (modItem.tags?.indexOf(filter) > -1) {
-                return true;
-            }
+        const sources = filterList.filter(f => f.startsWith("source:")).map(f => f.substring(7));
+        if (sources.length && !sources.includes(modItem.sourceType)) {
+            return false;
         }
-        return false;
+        const enabledStates = filterList.filter(f => f.startsWith("enabled:")).map(f => f === "enabled:true");
+        if (enabledStates.length && !enabledStates.includes(isEnabled)) {
+            return false;
+        }
+        const statuses = filterList.filter(f => APPROVAL_FILTERS.has(f));
+        if (statuses.length && !statuses.includes(modItem.approvalStatus)) {
+            return false;
+        }
+        const tags = filterList.filter(f => TAG_FILTERS.has(f));
+        if (tags.length && !tags.some(tag => modItem.tags?.includes(tag))) {
+            return false;
+        }
+
+        const words = filterList.filter(f => !f.startsWith("source:") && !f.startsWith("enabled:")
+            && !APPROVAL_FILTERS.has(f) && !TAG_FILTERS.has(f));
+        const name = (modItem.displayName || modItem.originalName || "").toLocaleLowerCase();
+        const nameId = (modItem.nameId || "").toLocaleLowerCase();
+        const modTags = (modItem.tags || []).map(tag => tag.toLocaleLowerCase());
+        const approval = (modItem.approvalStatus || "").toLocaleLowerCase();
+        return words.every(word => {
+            const w = word.trim().toLocaleLowerCase();
+            return !w || name.includes(w) || nameId.includes(w) || modTags.includes(w) || approval === w;
+        });
     }
 
     // ====================================

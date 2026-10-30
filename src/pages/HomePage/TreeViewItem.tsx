@@ -1,6 +1,7 @@
 import {t} from "i18next";
 import React, {useState, useSyncExternalStore} from "react";
 import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
+import {ModDescriptionHover} from "@/pages/HomePage/ModDescriptionHover";
 import {CloseCircleFilled, DisconnectOutlined, FolderOpenOutlined} from "@ant-design/icons";
 import {
     ClockCircleOutlined,
@@ -1106,6 +1107,13 @@ function TreeViewItemInner({
     itemOrder,
 }: TreeViewItemProps) {
     const {token} = useToken();
+    const describedMod = React.useMemo(() => ({
+        modId: nodeData.modId,
+        platformId: nodeData.platformId,
+        nameId: nodeData.nameId,
+        sourceType: nodeData.sourceType,
+        url: nodeData.url,
+    }), [nodeData.modId, nodeData.platformId, nodeData.nameId, nodeData.sourceType, nodeData.url]);
     // Menu shows Link/Unlink depending on the mod's repository link
     const repoLinkVersion = useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
     const repoLink = RepositoryUpdates.linkForModAt(nodeData, repoLinkVersion);
@@ -1216,7 +1224,9 @@ function TreeViewItemInner({
 
                     {
                         (nodeData.sourceType === ModSourceType.Modio || nodeData.sourceType === MODCAT_PLATFORM || nodeData.sourceType === NEXUSMODS_PLATFORM) &&
-                        <ModTreeViewTitle nodeData={nodeData}/>
+                        <ModDescriptionHover mod={describedMod}>
+                            <ModTreeViewTitle nodeData={nodeData}/>
+                        </ModDescriptionHover>
                     }
 
                     {
@@ -1229,7 +1239,9 @@ function TreeViewItemInner({
 
                     {
                         nodeData.sourceType === ModSourceType.Local &&
-                        <ModTreeViewLocalTitle nodeData={nodeData} />
+                        <ModDescriptionHover mod={describedMod}>
+                            <ModTreeViewLocalTitle nodeData={nodeData} />
+                        </ModDescriptionHover>
                     }
 
                     {/* 右侧区域：tags 靠右 */}

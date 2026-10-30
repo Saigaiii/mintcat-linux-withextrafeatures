@@ -26,6 +26,7 @@ import {EmptyPage} from "@/pages/EmptyPage.tsx";
 import {ConfigManageDialog} from "@/dialogs/ConfigManageDialog";
 import {MintImportDialog} from "@/dialogs/MintImportDialog";
 import {useFileDrop} from "@/hooks/useFileDrop";
+import {ModDescriptions} from "@/services/ModDescriptions";
 
 import {SelectGameDialog} from "@/dialogs/SelectGameDialog";
 import {useKeyboardListener} from "@/hooks/useKeyboardListener.tsx";
@@ -107,6 +108,7 @@ const AppContent = () => {
         AppInitializer.initializeCore()
             .then(async () => {
                 console.log('[App] Core initialization complete');
+                ModDescriptions.init().catch(console.error);
                 setInitError(null);
                 setIsAppViewModelReady(true);
                 const completed = await DeviceApi.getOnboardingCompleted();
