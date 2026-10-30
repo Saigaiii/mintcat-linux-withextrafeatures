@@ -146,6 +146,15 @@ export const SearchBox = ({ onUpdateTreeView }: SearchBoxProps) => {
         onUpdateTreeView();
     }
 
+    // Esc clears the typed text in the box; drop its filter too so the list matches what's shown
+    const onKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key !== "Escape" || !searchKeyword) return;
+        clearTimeout(typingTimer.current);
+        setSearchKeyword("");
+        TreeViewConverter.filterList = [...(searchValue ?? [])];
+        onUpdateTreeView();
+    }
+
     const onBlur = () => {
         const filterList = TreeViewConverter.filterList;
         setSearchKeyword("");
@@ -158,6 +167,7 @@ export const SearchBox = ({ onUpdateTreeView }: SearchBoxProps) => {
                 options={searchOptions}
                 onChange={onSearchSelectChange}
                 onBlur={onBlur}
+                onKeyDown={onKeyDown}
                 className="w-300"
                 placeholder={t("modSearch.placeholder")}
                 suffixIcon={<SearchOutlined/>}
