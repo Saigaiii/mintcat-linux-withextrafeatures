@@ -627,6 +627,7 @@
 	"repoLink.unlinked": "已取消仓库关联",
 	"repoUpdate.updated": "已将 {{name}} 更新到 {{date}} 的上传",
 	"repoUpdate.linked": "已通过文件名在仓库中找到并关联 {{name}}",
+	"repoUpdate.autoLinked": "已按文件名将 {{count}} 个本地模组关联到模组仓库帖子",
 	"repoUpdate.ambiguous": "{{name}}：多个仓库帖子包含此文件 —— 右键 → 关联到 Pak Hub 帖子… 进行选择",
 	"repoUpdate.differs": "{{name}}：你的文件与仓库中的任何上传都不匹配；右键 → 更新 可切换到最新",
 	"repoUpdate.failed": "无法检查 {{name}}：{{reason}}",

@@ -2,8 +2,9 @@
  * Update checks for local mods that come from a Pak Hub style repository.
  *
  * A local mod is "linked" to a repository post + file name. Links are made when a mod is
- * added from a repository, automatically by matching the mod's file name, or by hand
- * (right-click → Link to Pak Hub post…, which also covers renamed files).
+ * added from a repository, automatically by matching the mod's file name (in the background
+ * when the list loads, and on the Update button), or by hand (right-click → Link to Pak Hub
+ * post…, which also covers renamed files).
  *
  * Updating downloads the newest upload of that file into MintCat's data folder and points
  * the mod at it; a file of the user's own (outside that folder) is never modified.
@@ -24,6 +25,7 @@ import type {CompleteModData} from "@/storage/dao/ModDAO";
 import {ModSourceType} from "@/models/mod/types";
 import {emitEvent} from "@/events";
 import {logActivity} from "@/services/ActivityLog";
+import {loadRepositoryDetail} from "@/apis/repositories/details";
 
 export interface RepositoryLink {
     repoId: string;
@@ -48,7 +50,14 @@ interface LinkStoreData {
     byPath: Record<string, RepositoryLink>;
     /** When a mod was last searched for without a match (to avoid searching every time) */
     noMatch: Record<string, number>;
+    /** Version of the matching rules the noMatch entries were made with */
+    matcher?: number;
+    /** Mods the user unlinked by hand: never linked automatically again */
+    unlinked?: Record<string, true>;
 }
+
+/** Bump when matching finds more, so mods that didn't match before are searched again */
+const MATCHER_VERSION = 2;
 
 const SETTINGS_KEY = 'repositoryModLinks';
 const NO_MATCH_RECHECK_MS = 7 * 24 * 3600 * 1000;
@@ -76,9 +85,16 @@ async function load(): Promise<LinkStoreData> {
         const settings = await StorageAPI.getSettings();
         const raw = await settings.getValue(SETTINGS_KEY);
         const parsed = raw ? JSON.parse(raw) : {};
-        data = {byMod: parsed.byMod ?? {}, byPath: parsed.byPath ?? {}, noMatch: parsed.noMatch ?? {}};
+        const current = (parsed.matcher ?? 1) >= MATCHER_VERSION;
+        data = {
+            byMod: parsed.byMod ?? {},
+            byPath: parsed.byPath ?? {},
+            noMatch: current ? parsed.noMatch ?? {} : {},
+            matcher: MATCHER_VERSION,
+            unlinked: parsed.unlinked ?? {},
+        };
     } catch {
-        data = {byMod: {}, byPath: {}, noMatch: {}};
+        data = {byMod: {}, byPath: {}, noMatch: {}, matcher: MATCHER_VERSION, unlinked: {}};
     }
     return data;
 }
@@ -124,6 +140,28 @@ function uploadsOf(files: RepositoryFile[], filename: string): RepositoryFile[] 
     const key = filename.toLowerCase();
     return files.filter(f => f.filename.toLowerCase() === key);
 }
+
+/** Discord (where most repository posts come from) turns spaces in file names into underscores */
+function looseName(filename: string): string {
+    return filename.toLowerCase().replace(/[\s_]+/g, "_");
+}
+
+/**
+ * Uploads in a post that are this file: the same name (any case), or the same name apart from
+ * spaces/underscores when the size is identical too.
+ */
+function matchingUploads(files: RepositoryFile[], filename: string, size: number | undefined): RepositoryFile[] {
+    const exact = uploadsOf(files, filename);
+    if (exact.length > 0) return exact;
+    if (size === undefined) return [];
+    const loose = looseName(filename);
+    const same = files.filter(f => looseName(f.filename) === loose);
+    return same.some(f => f.sizeBytes === size) ? same : [];
+}
+
+let autoLinkTimer: ReturnType<typeof setTimeout> | undefined;
+let autoLinkRunning = false;
+let autoLinkQueued: CompleteModData[] | null = null;
 
 export const RepositoryUpdates = {
     /** Load links (call once at startup so menus know which mods are linked) */
@@ -190,6 +228,7 @@ export const RepositoryUpdates = {
         const store = await load();
         store.byMod[String(modId)] = link;
         delete store.noMatch[String(modId)];
+        delete store.unlinked?.[String(modId)];
         updates.delete(modId);
         await save();
     },
@@ -197,6 +236,7 @@ export const RepositoryUpdates = {
     async removeLink(modId: number): Promise<void> {
         const store = await load();
         delete store.byMod[String(modId)];
+        (store.unlinked ??= {})[String(modId)] = true;
         updates.delete(modId);
         await save();
     },
@@ -211,7 +251,7 @@ export const RepositoryUpdates = {
     },
 
     /**
-     * Find the post a local mod's file came from by its exact file name.
+     * Find the post a local mod's file came from by its file name (see matchingUploads).
      * Returns the link, 'ambiguous' when several posts could be it, or undefined.
      */
     async autoMatch(mod: CompleteModData, repos: ModRepository[]): Promise<RepositoryLink | 'ambiguous' | undefined> {
@@ -219,22 +259,32 @@ export const RepositoryUpdates = {
         if (!safeModFileName(filename)) return undefined;
         const size = await localSize(modPath(mod));
 
-        const candidates: Array<{ repo: ModRepository; slug: string; uploads: RepositoryFile[] }> = [];
+        const candidates: Array<{ repo: ModRepository; slug: string; uploads: RepositoryFile[]; fileCount: number }> = [];
         for (const repo of repos) {
-            let list;
-            try {
-                list = await RepositoryApi.listMods(repo, {query: filename, page: 1});
-            } catch {
-                continue;
-            }
-            for (const summary of list.mods.slice(0, 5)) {
+            const queries = [filename];
+            if (/\s/.test(filename)) queries.push(filename.replace(/\s+/g, "_"));
+            const seen = new Set<string>();
+            for (const query of queries) {
+                let list;
                 try {
-                    const detail = await RepositoryApi.getMod(repo, summary.slug);
-                    const uploads = uploadsOf(detail.files, filename);
-                    if (uploads.length > 0) candidates.push({repo, slug: summary.slug, uploads});
+                    list = await RepositoryApi.listMods(repo, {query, page: 1});
                 } catch {
-                    // skip unreadable posts
+                    continue;
                 }
+                for (const summary of list.mods.slice(0, 5)) {
+                    if (seen.has(summary.slug)) continue;
+                    seen.add(summary.slug);
+                    try {
+                        const detail = await loadRepositoryDetail(repo.baseUrl, summary.slug);
+                        const uploads = matchingUploads(detail.files, filename, size);
+                        if (uploads.length > 0) {
+                            candidates.push({repo, slug: summary.slug, uploads, fileCount: detail.files.length});
+                        }
+                    } catch {
+                        // skip unreadable posts
+                    }
+                }
+                if (candidates.length > 0) break;
             }
         }
         if (candidates.length === 0) return undefined;
@@ -243,18 +293,82 @@ export const RepositoryUpdates = {
         let chosen = candidates.length === 1 ? candidates[0] : undefined;
         if (!chosen) {
             const exact = candidates.filter(sizeMatches);
-            if (exact.length !== 1) return 'ambiguous';
-            chosen = exact[0];
+            if (exact.length === 1) {
+                chosen = exact[0];
+            } else if (exact.length > 1) {
+                // The same file in a post of its own and in a bundle post: the post of its own
+                const fewest = Math.min(...exact.map(c => c.fileCount));
+                const dedicated = exact.filter(c => c.fileCount === fewest);
+                if (dedicated.length === 1) chosen = dedicated[0];
+            }
+            if (!chosen) return 'ambiguous';
         }
         const mine = size !== undefined ? chosen.uploads.find(u => u.sizeBytes === size) : undefined;
         return {
             repoId: chosen.repo.id,
             slug: chosen.slug,
-            filename: chosen.uploads[0].filename,
+            filename: (mine ?? chosen.uploads[0]).filename,
             postedAt: mine?.postedAt,
             sizeBytes: mine?.sizeBytes,
             via: 'auto',
         };
+    },
+
+    /**
+     * Link the list's local mods to repository posts in the background (no downloads). Runs a
+     * few seconds after the last call; mods searched without a match wait a week (or until the
+     * matching rules improve) before being searched again.
+     */
+    scheduleAutoLink(mods: CompleteModData[]): void {
+        autoLinkQueued = mods;
+        clearTimeout(autoLinkTimer);
+        autoLinkTimer = setTimeout(() => void this.runAutoLink(), 4000);
+    },
+
+    async runAutoLink(): Promise<number> {
+        if (autoLinkRunning || !autoLinkQueued) return 0;
+        const mods = autoLinkQueued;
+        autoLinkQueued = null;
+        autoLinkRunning = true;
+        let linked = 0;
+        try {
+            const repos = await RepositoryStore.list();
+            if (repos.length === 0) return 0;
+            const store = await load();
+            const todo = mods.filter(m => m.sourceType === ModSourceType.Local && m.modId != null
+                && !store.byMod[String(m.modId)]
+                && !store.unlinked?.[String(m.modId)]
+                && Date.now() - (store.noMatch[String(m.modId)] ?? 0) >= NO_MATCH_RECHECK_MS);
+            if (todo.length === 0) return 0;
+            await runPool(todo, async (mod) => {
+                try {
+                    if (!(await exists(modPath(mod)))) return;
+                    if (await this.getLink(mod)) return;
+                    const match = await this.autoMatch(mod, repos);
+                    if (!match || match === 'ambiguous') {
+                        store.noMatch[String(mod.modId)] = Date.now();
+                        if (match === 'ambiguous') {
+                            await logActivity('info', t("repoUpdate.ambiguous", {name: modName(mod)}), modPath(mod), 'repository');
+                        }
+                        return;
+                    }
+                    await this.setLink(mod.modId!, match);
+                    linked++;
+                    await logActivity('info', t("repoUpdate.linked", {name: modName(mod)}),
+                        RepositoryApi.modPageUrl(repos.find(r => r.id === match.repoId)!, match.slug), 'repository');
+                } catch (error) {
+                    console.warn('[RepositoryUpdates] auto link failed', error);
+                }
+            });
+            await save();
+            if (linked > 0) {
+                await logActivity('success', t("repoUpdate.autoLinked", {count: linked}), undefined, 'repository');
+            }
+        } finally {
+            autoLinkRunning = false;
+            if (autoLinkQueued) this.scheduleAutoLink(autoLinkQueued);
+        }
+        return linked;
     },
 
     /** Compare the mod's file with the newest upload of its file on the repository */
@@ -346,6 +460,7 @@ export const RepositoryUpdates = {
                 if (!(await exists(modPath(mod)))) return;
                 let link = await this.getLink(mod);
                 if (!link) {
+                    if (store.unlinked?.[String(mod.modId)]) return;
                     const lastMiss = store.noMatch[String(mod.modId)] ?? 0;
                     if (Date.now() - lastMiss < NO_MATCH_RECHECK_MS) return;
                     const match = await this.autoMatch(mod, repos);

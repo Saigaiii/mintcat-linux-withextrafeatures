@@ -627,6 +627,7 @@
     "repoLink.unlinked": "Unlinked from the repository",
     "repoUpdate.updated": "Updated {{name}} to the upload from {{date}}",
     "repoUpdate.linked": "Found {{name}} on a repository by its file name and linked it",
+    "repoUpdate.autoLinked": "Linked {{count}} local mod(s) to their repository posts by file name",
     "repoUpdate.ambiguous": "{{name}}: several repository posts have this file — right-click → Link to Pak Hub post… to choose",
     "repoUpdate.differs": "{{name}}: your file doesn't match any upload on the repository; right-click → Update to switch to the newest",
     "repoUpdate.failed": "Couldn't check {{name}}: {{reason}}",

@@ -880,6 +880,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
         ModDescriptions.prefetch(allMods
             .filter(m => inProfile.has(m.modId!))
             .map(m => ({modId: m.modId!, platformId: m.platformId, nameId: m.nameId, sourceType: m.sourceType, url: m.url})));
+        // Link local mods to their repository (Pak Hub) posts in the background, by file name
+        RepositoryUpdates.scheduleAutoLink(allMods.filter(m => inProfile.has(m.modId!)));
 
         // TreeViewConverter now accepts CompleteModData[] and ProfileModData[]
         const converter = new TreeViewConverter(allMods, profileMods);
