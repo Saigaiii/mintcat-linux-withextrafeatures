@@ -13,7 +13,7 @@ import {
     DeleteOutlined,
     EditOutlined, FieldTimeOutlined, LoadingOutlined, MinusSquareOutlined, PauseCircleOutlined, PlayCircleOutlined,
     PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined, ImportOutlined,
-    UnorderedListOutlined, WarningOutlined
+    UnorderedListOutlined, WarningOutlined, FolderOutlined
 } from "@ant-design/icons";
 import * as checkbox from "antd/es/checkbox";
 
@@ -76,6 +76,8 @@ interface ModListPageState {
     treeData?: TreeProps['treeData'];
     contextMenus?: MenuProps['items'];
     isMultiSelect?: boolean;
+    /** Multi-select was started with Ctrl/Shift-click or Ctrl+A (a plain click ends it) */
+    autoMultiSelect?: boolean;
     expandedKeys?: any[];
     selectedKeys?: any[];
     checkedKeys?: any[];
@@ -386,6 +388,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const enabled = e.target.checked;
         this.setState((state) => ({
             isMultiSelect: enabled,
+            autoMultiSelect: false,
             checkedKeys: enabled ? (state.selectedKeys?.length ? [...state.selectedKeys] : []) : [],
         }));
     }
@@ -412,6 +415,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
                     await vm.removeMod(modItem.modId!);
                 }
             }
+            this.setState((state) => ({
+                checkedKeys: [],
+                ...(state.autoMultiSelect ? { isMultiSelect: false, autoMultiSelect: false } : {}),
+            }));
             await this.updateTreeView();
             await this.updateCountLabel();
         }
@@ -798,9 +805,165 @@ export class HomePage extends BasePage<any, ModListPageState> {
     }
 
     /** 仅更新高亮选中（点击行时），避免与 onCheck 混用导致焦点跳到第一项 */
+    /** Mod rows in the order shown, skipping mods inside collapsed folders */
+    private getVisibleModKeys(nodes: DataNode[] | undefined = this.state.treeData as DataNode[] | undefined): string[] {
+        const expanded = new Set((this.state.expandedKeys ?? []).map(String));
+        const keys: string[] = [];
+        const walk = (list: DataNode[] | undefined) => {
+            for (const node of list ?? []) {
+                if (node.isLeaf) keys.push(String(node.key));
+                else if (expanded.has(String(node.key))) walk(node.children as DataNode[]);
+            }
+        };
+        walk(nodes);
+        return keys;
+    }
+
+    private selectionAnchor?: string;
+
+    /**
+     * Click: select one row. Ctrl-click: add/remove a mod (or all mods of a folder) from the
+     * selection. Shift-click: select the mods between the last clicked one and this one. A
+     * selection of several mods shows the bulk bar (enable, disable, move, delete, …).
+     */
     @autoBind
-    private onTreeNodeSelect(keys: any[]) {
+    private onTreeNodeSelect(keys: any[], info?: any) {
+        const ev = info?.nativeEvent as MouseEvent | undefined;
+        const node = info?.node;
+        const key = node ? String(node.key) : undefined;
+        const additive = !!ev && (ev.ctrlKey || ev.metaKey);
+        if (key && ev && (additive || ev.shiftKey)) {
+            const current = new Set<string>(this.state.isMultiSelect
+                ? (this.state.checkedKeys ?? []).map(String)
+                : (this.state.selectedKeys ?? []).map(String).filter(k => k.startsWith("mod-")));
+            let next: Set<string>;
+            if (!node.isLeaf) {
+                const inFolder = this.getAllLeafKeys([node] as DataNode[]).map(String);
+                const allIn = inFolder.length > 0 && inFolder.every(k => current.has(k));
+                next = new Set(current);
+                inFolder.forEach(k => (allIn ? next.delete(k) : next.add(k)));
+            } else if (ev.shiftKey && this.selectionAnchor) {
+                const visible = this.getVisibleModKeys();
+                const from = visible.indexOf(this.selectionAnchor);
+                const to = visible.indexOf(key);
+                const range = from >= 0 && to >= 0
+                    ? visible.slice(Math.min(from, to), Math.max(from, to) + 1)
+                    : [key];
+                next = additive ? new Set([...current, ...range]) : new Set(range);
+            } else {
+                next = new Set(current);
+                if (next.has(key)) next.delete(key); else next.add(key);
+                this.selectionAnchor = key;
+            }
+            if (node.isLeaf && !ev.shiftKey) this.selectionAnchor = key;
+            this.setState((state) => ({
+                isMultiSelect: true,
+                autoMultiSelect: state.isMultiSelect ? state.autoMultiSelect : true,
+                checkedKeys: [...next],
+                selectedKeys: node.isLeaf ? [key] : state.selectedKeys,
+            }));
+            return;
+        }
+        if (key && node?.isLeaf) this.selectionAnchor = key;
+        if (this.state.autoMultiSelect) {
+            this.setState({ isMultiSelect: false, autoMultiSelect: false, checkedKeys: [], selectedKeys: keys ?? [] });
+            return;
+        }
         this.setState({ selectedKeys: keys ?? [] });
+    }
+
+    /** Folders for the bulk "Move to" menu, with their parents ("Cosmetics / Custom Icons") */
+    private getFolderChoices(): { key: string; label: string }[] {
+        const out: { key: string; label: string }[] = [];
+        const walk = (list: DataNode[] | undefined, path: string[]) => {
+            for (const node of list ?? []) {
+                if (node.isLeaf) continue;
+                const name = String((node as any).title ?? "");
+                out.push({ key: String(node.key), label: [...path, name].join(" / ") });
+                walk(node.children as DataNode[], [...path, name]);
+            }
+        };
+        walk(this.state.treeData as DataNode[] | undefined, []);
+        return out;
+    }
+
+    /** Move the selected mods to the top of a folder, keeping their order (like moving one mod) */
+    @autoBind
+    private async onMultiMoveClick(targetFolderKey: string) {
+        const selected = new Set(this.getBulkOpKeys().map(String).filter(k => k.startsWith("mod-")));
+        if (selected.size === 0) return;
+        try {
+            await IoC.get(TreeViewModel);
+            const profileVM = await IoC.get(ProfileViewModel);
+            const activeRoot = await profileVM.getActiveProfileTreeRoot();
+            const modsApi = await StorageAPI.getMods();
+            const basic = await modsApi.getAllMods();
+            const allMods = await modsApi.getBatchCompleteModDataOptimized(basic.map(m => m.modId!));
+            const converter = new TreeViewConverter(allMods);
+            // Work on the whole list, not only what the search shows
+            const filterList = TreeViewConverter.filterList;
+            TreeViewConverter.filterList = [];
+            const full = (converter.convertToFromRoot(activeRoot) ?? []) as any[];
+            TreeViewConverter.filterList = filterList;
+
+            const picked: any[] = [];
+            const strip = (list: any[]): any[] => list.filter(node => {
+                if (selected.has(String(node.key))) {
+                    picked.push(node);
+                    return false;
+                }
+                if (node.children) node.children = strip(node.children);
+                return true;
+            });
+            const rest = strip(full);
+            const findFolder = (list: any[]): any | undefined => {
+                for (const node of list) {
+                    if (String(node.key) === targetFolderKey) return node;
+                    const inner = node.children ? findFolder(node.children) : undefined;
+                    if (inner) return inner;
+                }
+                return undefined;
+            };
+            const target = findFolder(rest);
+            if (!target || picked.length === 0) return;
+            target.children = [...picked, ...(target.children ?? [])];
+
+            const profileTreeItem = converter.convertFrom(rest);
+            if (!profileTreeItem || profileTreeItem.children.length === 0) return;
+            await profileVM.saveProfileTreeToDatabase(profileTreeItem);
+            const folderName = this.getFolderChoices().find(f => f.key === targetFolderKey)?.label ?? "";
+            message.success(t("multi.moved", { count: picked.length, folder: folderName }));
+            if (!(this.state.expandedKeys ?? []).map(String).includes(targetFolderKey)) {
+                this.setState((state) => ({ expandedKeys: [...(state.expandedKeys ?? []), targetFolderKey] }));
+            }
+            await this.updateTreeView();
+            this.refreshUnsavedState();
+        } catch (error) {
+            console.error("[HomePage] bulk move failed", error);
+            message.error(t("multi.moveFailed", { reason: String(error) }));
+        }
+    }
+
+    /** Ctrl+A selects every shown mod, Escape ends a Ctrl/Shift selection, Delete removes the selection */
+    @autoBind
+    private onListKeyDown(e: KeyboardEvent) {
+        if (!this.props.active) return;
+        const target = e.target as HTMLElement | null;
+        if (target && (target.closest("input, textarea, select, [contenteditable='true']"))) return;
+        if (document.querySelector(".ant-modal-wrap:not([style*='display: none'])")) return;
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+            e.preventDefault();
+            this.setState((state) => ({
+                isMultiSelect: true,
+                autoMultiSelect: state.isMultiSelect ? state.autoMultiSelect : true,
+                checkedKeys: this.getAllLeafKeys(state.treeData as DataNode[]).map(String),
+            }));
+        } else if (e.key === "Escape" && this.state.autoMultiSelect) {
+            this.setState({ isMultiSelect: false, autoMultiSelect: false, checkedKeys: [] });
+        } else if (e.key === "Delete" && this.state.isMultiSelect && (this.state.checkedKeys ?? []).length > 0) {
+            e.preventDefault();
+            void this.onMultiDeleteClick();
+        }
     }
 
     /** 仅更新勾选列表（点击复选框时），用于多选与批量操作 */
@@ -1169,6 +1332,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     async componentDidMount(): Promise<void> {
         perfMark('home:mount');
+        window.addEventListener("keydown", this.onListKeyDown);
         // Wait for core to be ready
         if (!AppInitializer.isCoreReady()) {
             await AppInitializer.initializeCore();
@@ -1285,6 +1449,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
     }
 
     componentWillUnmount(): void {
+        window.removeEventListener("keydown", this.onListKeyDown);
         this.unhookLogPanel();
         this.unhookWindowResized();
         this.unlistenFocusRecheck?.();
@@ -1482,8 +1647,11 @@ export class HomePage extends BasePage<any, ModListPageState> {
                         </div>
                         <Flex className="home-footer-bar" gap={4} align="center"
                               style={{ position: "relative", zIndex: 5 }}>
-                            <Checkbox onChange={this.onMultiCheckboxChange}
-                            />
+                            <Tooltip title={t("multi.checkboxHint")} mouseEnterDelay={0.4}>
+                                <Checkbox checked={!!this.state.isMultiSelect}
+                                          onChange={this.onMultiCheckboxChange}
+                                />
+                            </Tooltip>
                             {
                                 this.state.isMultiSelect === true &&
                                 <Space size={4} className="mr-auto">
@@ -1499,6 +1667,19 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                             onClick={this.onMultiDeleteClick}>
                                         {t("Delete")}
                                     </Button>
+                                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+                                        {t("multi.selected", { count: (this.state.checkedKeys ?? []).filter(k => String(k).startsWith("mod-")).length })}
+                                    </Typography.Text>
+                                    <Dropdown trigger={["click"]}
+                                              menu={{
+                                                  items: this.getFolderChoices().map(f => ({ key: f.key, label: f.label, icon: <FolderOutlined/> })),
+                                                  onClick: ({ key }) => void this.onMultiMoveClick(String(key)),
+                                                  style: { maxHeight: 360, overflowY: "auto" },
+                                              }}>
+                                        <Button type="text" size={"small"} icon={<FolderOpenOutlined/>}>
+                                            {t("multi.moveTo")}
+                                        </Button>
+                                    </Dropdown>
                                     <Button type="text" size={"small"}
                                             icon={<PlayCircleOutlined/>}
                                             onClick={() => this.onMultiEnableClick(true)}>

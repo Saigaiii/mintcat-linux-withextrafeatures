@@ -28,7 +28,7 @@ export interface TreeViewProps {
     onMenuClick: (key: string, nodeKey: string) => void;
     onUpdateTreeView?: () => void;
     onCountLabelUpdate?: () => Promise<void>;
-    onTreeNodeSelect?: (keys: any) => void;
+    onTreeNodeSelect?: (keys: any, info?: any) => void;
     onTreeNodeCheck?: (checkedKeys: any) => void;
     onTreeNodeExpand?: (keys: any) => void;
     onTreeRightClick?: (info: any) => void;
@@ -262,9 +262,9 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
     }
 
     @autoBind
-    private onTreeNodeSelect(keys: any) {
+    private onTreeNodeSelect(keys: any, info?: any) {
         if (this.props.onTreeNodeSelect) {
-            this.props.onTreeNodeSelect(keys);
+            this.props.onTreeNodeSelect(keys, info);
         }
     }
 
