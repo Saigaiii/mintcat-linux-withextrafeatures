@@ -61,6 +61,8 @@ import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
 import { RepositoryUpdates } from "@/services/RepositoryUpdates";
 import { logActivity } from "@/services/ActivityLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
+import { UpdateReviewDialog } from "@/dialogs/UpdateReviewDialog";
+import type { UpdateReview } from "@/services/RepositoryUpdates";
 import { openMintImport } from "@/dialogs/MintImportDialog";
 import { ModDescriptions } from "@/services/ModDescriptions";
 import { ConflictService } from "@/services/ConflictService";
@@ -91,6 +93,8 @@ interface ModListPageState {
     hasUnsavedChanges?: boolean;
     /** Local mod being linked to a repository post (Link to Pak Hub post…) */
     repoLinkMod?: CompleteModData | null;
+    /** Repository updates waiting for the user to pick what to replace */
+    updateReviews?: UpdateReview[] | null;
 }
 
 
@@ -567,12 +571,11 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // Local mods that come from a Pak Hub style repository
         try {
             const repoResult = await RepositoryUpdates.checkAll(scopedMods);
-            if (repoResult.updated > 0 || repoResult.flagged > 0 || repoResult.linked > 0) {
-                await logActivity('info', t("repoUpdate.summary", repoResult), undefined, 'repository');
+            if (repoResult.reviews.length > 0 || repoResult.linked > 0) {
+                await logActivity('info', t("repoUpdate.reviewSummary", {found: repoResult.reviews.length, linked: repoResult.linked}), undefined, 'repository');
             }
-            if (repoResult.flagged > 0) {
-                message.warning(t("repoUpdate.flaggedToast", {count: repoResult.flagged}));
-            }
+            // Nothing is replaced without asking: show what was found
+            if (repoResult.reviews.length > 0) this.setState({updateReviews: repoResult.reviews});
         } catch (e) {
             console.warn('[HomePage] repository update check failed', e);
         }
@@ -1258,10 +1261,11 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 if (mod && mod.sourceType === ModSourceType.Local) {
                     // Local mods can be updated from the repository post they're linked to
                     try {
-                        const outcome = await RepositoryUpdates.updateOne(mod);
+                        const hide = message.loading(t("repoUpdate.checking"), 0);
+                        const outcome = await RepositoryUpdates.reviewOne(mod).finally(hide);
                         if (outcome === 'notLinked') message.info(t("repoUpdate.notLinked"));
                         else if (outcome === 'upToDate') message.success(t("repoUpdate.upToDate"));
-                        else shouldUpdateTree = true;
+                        else this.setState({updateReviews: [outcome]});
                     } catch (e) {
                         message.error(t("repoUpdate.failed", {name: mod.displayName, reason: String(e)}));
                     }
@@ -1492,6 +1496,16 @@ export class HomePage extends BasePage<any, ModListPageState> {
             <div className="mod-list-page-card">
                 <RepositoryLinkDialog mod={this.state.repoLinkMod ?? null}
                                       onClose={() => this.setState({repoLinkMod: null})}/>
+                {this.state.updateReviews && this.state.updateReviews.length > 0 && (
+                    <UpdateReviewDialog reviews={this.state.updateReviews}
+                                        onClose={async (applied) => {
+                                            this.setState({updateReviews: null});
+                                            if (applied > 0) {
+                                                await this.updateTreeView();
+                                                await this.updateCountLabel();
+                                            }
+                                        }}/>
+                )}
                 <ProfileEditDialog ref={this.profileEditDialogRef}/>
                 <InputDialog ref={this.inputDialogRef}/>
                 <Spin spinning={this.state.loading}

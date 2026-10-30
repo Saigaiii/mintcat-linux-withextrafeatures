@@ -9,6 +9,7 @@ import { ButtonLayout, SettingLayout } from '@/pages/SettingPage/Layout.ts';
 import { useEventListener } from '@/events';
 import {
     setMintcatProxyModeResolved,
+    DEFAULT_MINTCAT_PROXY_MODE,
     type MintcatProxyMode,
 } from '@/services/network';
 import {
@@ -44,7 +45,7 @@ function formatProbeError(err?: string): string {
 export function NetworkSettings() {
     const [serverMode, setServerMode] = React.useState<ServerModeUi>('auto');
     const [networkProxy, setNetworkProxy] = React.useState('');
-    const [mintcatProxyMode, setMintcatProxyMode] = React.useState<MintcatProxyMode>('auto');
+    const [mintcatProxyMode, setMintcatProxyMode] = React.useState<MintcatProxyMode>(DEFAULT_MINTCAT_PROXY_MODE);
     const [probeResults, setProbeResults] = React.useState<ProbeResult[]>([]);
     const [probing, setProbing] = React.useState(false);
 

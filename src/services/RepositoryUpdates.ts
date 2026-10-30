@@ -159,6 +159,64 @@ function matchingUploads(files: RepositoryFile[], filename: string, size: number
     return same.some(f => f.sizeBytes === size) ? same : [];
 }
 
+/**
+ * A file name without its version marker, to spot new versions uploaded under a new name:
+ * "Anti-Asthma_v6.pak" → "anti-asthma", "DRAKIndicator_v0.1.1S.pak" → "drakindicator".
+ * With `loose`, trailing digits count as a version too ("BetterTerminal3" → "betterterminal");
+ * that is only used inside the post the mod is linked to.
+ */
+export function versionStem(filename: string, loose = false): string {
+    let stem = filename.toLowerCase().replace(/\.(pak|zip|7z|rar)$/i, "");
+    stem = stem.replace(/[\s_\-.]*\(?v(?:er(?:sion)?)?[\s_.]?\d+(?:[._]\d+)*[a-z]?\)?$/, "");
+    stem = stem.replace(/^v\d+(?:[._]\d+)*[\s_\-]+/, "");
+    stem = stem.replace(/[\s_\-]+\d+(?:[._]\d+)+$/, "");
+    if (loose) stem = stem.replace(/[\s_\-]*\d+$/, "");
+    return stem.replace(/[\s_\-]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function postedTime(upload: { postedAt?: string }): number {
+    return Date.parse(upload.postedAt ?? "") || 0;
+}
+
+/** One upload that could replace a local mod's file */
+export interface UpdateCandidate {
+    key: string;
+    repoId: string;
+    slug: string;
+    postTitle: string;
+    postUrl: string;
+    upload: RepositoryFile;
+    /** Same file name as the mod's file, or a new name that looks like a new version of it */
+    renamed: boolean;
+    /** In the post the mod is linked to, or found in another post */
+    samePost: boolean;
+    /** Uploaded by the same person as the version the user has (or the post's author) */
+    sameUploader: boolean;
+    /** Messages posted with this and the in-between versions, newest first */
+    notes: { postedAt: string; postedBy: string; filename: string; text: string }[];
+    /** Picked by default in the review */
+    recommended: boolean;
+}
+
+export interface UpdateReview {
+    mod: CompleteModData;
+    link: RepositoryLink;
+    current: {
+        path: string;
+        filename: string;
+        size?: number;
+        modifiedAt?: number;
+        /** The upload the user has, when known */
+        postedAt?: string;
+        postedBy?: string;
+    };
+    /** Whether we know which upload the user has (otherwise the file just differs) */
+    versionKnown: boolean;
+    candidates: UpdateCandidate[];
+}
+
+const MAX_OTHER_POSTS = 4;
+
 let autoLinkTimer: ReturnType<typeof setTimeout> | undefined;
 let autoLinkRunning = false;
 let autoLinkQueued: CompleteModData[] | null = null;
@@ -424,7 +482,10 @@ export const RepositoryUpdates = {
         const info = await stat(target);
         const modsApi = await StorageAPI.getMods();
         const previousPath = modPath(mod);
-        await modsApi.updateMod(mod.modId, {url: target});
+        const changes: { url: string; displayName?: string } = {url: target};
+        // A name that was just the old file name follows the new file name
+        if (!mod.displayName || mod.displayName === fileNameOf(previousPath)) changes.displayName = name;
+        await modsApi.updateMod(mod.modId, changes);
         await modsApi.upsertModDownload({modId: mod.modId, cachePath: target, fileSize: info.size, downloadProgress: 100});
         await modsApi.upsertModStatus({modId: mod.modId, lastUpdateDate: info.mtime?.getTime() ?? Date.now(), isLocalNotFound: false});
 
@@ -444,12 +505,145 @@ export const RepositoryUpdates = {
     },
 
     /**
-     * Update button: check every local mod, link unlinked ones when possible, and apply
-     * updates whose current version is known. Returns counts for a summary.
+     * Everything that could replace a linked local mod's file: newer uploads of the same file in
+     * its post, files in that post that look like a new version under a new name
+     * (Anti-Asthma.pak → Anti-Asthma_v6.pak), and the same in other posts found by searching
+     * the repository (only offered, never picked by default). Nothing is downloaded here.
      */
-    async checkAll(mods: CompleteModData[]): Promise<{ updated: number; flagged: number; linked: number }> {
+    async review(mod: CompleteModData, link: RepositoryLink, options: { searchOtherPosts?: boolean } = {}): Promise<UpdateReview | null> {
+        const repo = await RepositoryStore.get(link.repoId);
+        if (!repo) throw new Error(t("repo.notFound"));
+        const path = modPath(mod);
+        let size: number | undefined;
+        let modifiedAt: number | undefined;
+        try {
+            const info = await stat(path);
+            size = info.size;
+            modifiedAt = info.mtime?.getTime();
+        } catch {
+            // file missing: still offer the upload
+        }
+
+        const detail = await RepositoryApi.getMod(repo, link.slug);
+        const sameName = uploadsOf(detail.files, link.filename);
+
+        // Learn which upload the user has when the file matches one exactly
+        if (!link.postedAt && size !== undefined) {
+            const mine = sameName.find(u => u.sizeBytes === size);
+            if (mine && mod.modId != null) {
+                link = {...link, postedAt: mine.postedAt, sizeBytes: mine.sizeBytes};
+                await this.setLink(mod.modId, link);
+            }
+        }
+        const mineUpload = link.postedAt
+            ? sameName.find(u => u.postedAt === link.postedAt && (link.sizeBytes === undefined || u.sizeBytes === link.sizeBytes))
+            : undefined;
+        const myTime = link.postedAt ? postedTime(link) : 0;
+        const originalUploader = (mineUpload ?? detail.files[detail.files.length - 1])?.postedBy ?? "";
+        const strictStem = versionStem(link.filename);
+        const looseStem = versionStem(link.filename, true);
+        const versionKnown = !!link.postedAt;
+
+        const review: UpdateReview = {
+            mod,
+            link,
+            current: {path, filename: fileNameOf(path), size, modifiedAt, postedAt: link.postedAt, postedBy: mineUpload?.postedBy},
+            versionKnown,
+            candidates: [],
+        };
+
+        const notesFor = (uploads: RepositoryFile[]) => uploads
+            .filter(u => u.postText && u.postText.trim())
+            .map(u => ({postedAt: u.postedAt, postedBy: u.postedBy, filename: u.filename, text: u.postText!.trim()}))
+            .filter((n, i, all) => all.findIndex(o => o.postedAt === n.postedAt && o.text === n.text) === i);
+
+        const addFromPost = (slug: string, title: string, files: RepositoryFile[], samePost: boolean) => {
+            const stemOf = (f: RepositoryFile) => samePost ? versionStem(f.filename, true) : versionStem(f.filename);
+            const wanted = samePost ? looseStem : strictStem;
+            if (!wanted) return;
+            // Uploads of this mod in the post: same name, or same name apart from the version
+            const related = files.filter(f => f.filename.toLowerCase() === link.filename.toLowerCase() || stemOf(f) === wanted);
+            const newer = related.filter(f => versionKnown ? postedTime(f) > myTime : true);
+            if (newer.length === 0) return;
+            const best = newer[0]; // newest first
+            if (!versionKnown && size !== undefined && best.sizeBytes === size) return; // same as the user's file
+            // Another post with a file of exactly the user's size is almost always the same file
+            // posted again (e.g. in a bundle post), not a new version
+            if (!samePost && size !== undefined && best.sizeBytes === size) return;
+            if (!versionKnown && samePost && best.filename.toLowerCase() !== link.filename.toLowerCase() && size !== undefined
+                && related.some(f => f.sizeBytes === size && postedTime(f) >= postedTime(best))) return;
+            const renamed = best.filename.toLowerCase() !== link.filename.toLowerCase();
+            const sameUploader = !!originalUploader && best.postedBy === originalUploader;
+            review.candidates.push({
+                key: `${repo.id}|${slug}|${best.filename}|${best.postedAt}`,
+                repoId: repo.id,
+                slug,
+                postTitle: title,
+                postUrl: RepositoryApi.modPageUrl(repo, slug),
+                upload: best,
+                renamed,
+                samePost,
+                sameUploader,
+                notes: notesFor(newer),
+                recommended: samePost && versionKnown && (!renamed || sameUploader),
+            });
+        };
+
+        addFromPost(link.slug, detail.name, detail.files, true);
+
+        if (options.searchOtherPosts && strictStem.length >= 4) {
+            try {
+                const query = fileNameOf(link.filename).replace(/\.[^.]+$/, "").replace(/[\s_\-.]*\(?v\d+(?:[._]\d+)*[a-z]?\)?$/i, "");
+                const list = await RepositoryApi.listMods(repo, {query, page: 1});
+                const others = list.mods
+                    .filter(m => m.slug !== link.slug)
+                    // a post started before the user's version can only matter through later thread uploads
+                    .filter(m => !versionKnown || postedTime(m) > myTime || m.threadFileCount > 0)
+                    .slice(0, MAX_OTHER_POSTS);
+                for (const other of others) {
+                    try {
+                        const otherDetail = await loadRepositoryDetail(repo.baseUrl, other.slug);
+                        addFromPost(other.slug, otherDetail.name || other.name, otherDetail.files, false);
+                    } catch {
+                        // skip unreadable posts
+                    }
+                }
+            } catch (error) {
+                console.warn('[RepositoryUpdates] search for other posts failed', error);
+            }
+        }
+
+        // Keep the newest per file name across posts; the linked post first
+        review.candidates.sort((a, b) => Number(b.samePost) - Number(a.samePost) || postedTime(b.upload) - postedTime(a.upload));
+
+        if (mod.modId != null) {
+            // The list's update icon only for the linked post; other posts are only offered here
+            const best = review.candidates.find(c => c.samePost);
+            if (best) updates.set(mod.modId, versionKnown ? {kind: 'newer', latest: best.upload} : {kind: 'differs', latest: best.upload});
+            else updates.delete(mod.modId);
+            notify();
+        }
+        return review.candidates.length > 0 ? review : null;
+    },
+
+    /** Replace the mod's file with the chosen upload (the link follows it to its post/name) */
+    async applyCandidate(review: UpdateReview, candidate: UpdateCandidate): Promise<void> {
+        const link: RepositoryLink = {
+            ...review.link,
+            repoId: candidate.repoId,
+            slug: candidate.slug,
+            filename: candidate.upload.filename,
+        };
+        await this.apply(review.mod, link, candidate.upload);
+    },
+
+    /**
+     * Update button: link unlinked local mods when possible and collect what could be updated.
+     * Nothing is replaced here: the caller shows the review and applies what the user picks.
+     */
+    async checkAll(mods: CompleteModData[]): Promise<{ reviews: UpdateReview[]; linked: number; failed: number }> {
         const repos = await RepositoryStore.list();
-        const result = {updated: 0, flagged: 0, linked: 0};
+        const result = {reviews: [] as UpdateReview[], linked: 0, failed: 0};
         if (repos.length === 0) return result;
 
         const store = await load();
@@ -478,28 +672,20 @@ export const RepositoryUpdates = {
                     result.linked++;
                     await logActivity('info', t("repoUpdate.linked", {name: modName(mod)}), RepositoryApi.modPageUrl(repos.find(r => r.id === link!.repoId)!, link.slug), 'repository');
                 }
-
-                const state = await this.check(mod, link);
-                if (state.kind === 'newer') {
-                    await this.apply(mod, link, state.latest);
-                    result.updated++;
-                } else if (state.kind === 'differs') {
-                    result.flagged++;
-                    await logActivity('warning', t("repoUpdate.differs", {name: modName(mod)}), modPath(mod), 'repository');
-                }
+                const review = await this.review(mod, link, {searchOtherPosts: true});
+                if (review) result.reviews.push(review);
             } catch (error) {
+                result.failed++;
                 await logActivity('error', t("repoUpdate.failed", {name: modName(mod), reason: String(error)}), modPath(mod), 'repository');
             }
         });
         await save();
+        result.reviews.sort((a, b) => modName(a.mod).localeCompare(modName(b.mod)));
         return result;
     },
 
-    /**
-     * Right-click → Update on a local mod: apply the newest upload even when the current
-     * version isn't known (the user asked for it).
-     */
-    async updateOne(mod: CompleteModData): Promise<'updated' | 'upToDate' | 'notLinked'> {
+    /** Right-click → Update on a local mod: what could replace it (shown in the review) */
+    async reviewOne(mod: CompleteModData): Promise<UpdateReview | 'upToDate' | 'notLinked'> {
         let link = await this.getLink(mod);
         if (!link) {
             const match = await this.autoMatch(mod, await RepositoryStore.list());
@@ -507,9 +693,10 @@ export const RepositoryUpdates = {
             link = match;
             await this.setLink(mod.modId!, link);
         }
-        const state = await this.check(mod, link);
-        if (state.kind === 'upToDate') return 'upToDate';
-        await this.apply(mod, link, state.latest);
-        return 'updated';
+        return (await this.review(mod, link, {searchOtherPosts: true})) ?? 'upToDate';
+    },
+
+    modName(mod: CompleteModData): string {
+        return modName(mod);
     },
 };

@@ -1,4 +1,5 @@
 pub mod app;
+pub mod backup;
 pub mod control_plane;
 pub mod download;
 pub mod frontend;

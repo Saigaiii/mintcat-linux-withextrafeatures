@@ -312,9 +312,25 @@ export class CloudBackupApi {
         if (await exists(backupPath)) {
             await remove(backupPath);
         }
+        // The database runs in WAL mode: recent changes may still sit in mintcat.sqlite-wal.
+        // Keep them with the .bak copy (SQLite reads <file>-wal next to <file>) and never leave
+        // the old -wal/-shm next to the restored file, where they would be applied to it.
+        for (const suffix of ["-wal", "-shm"]) {
+            if (await exists(`${backupPath}${suffix}`)) {
+                await remove(`${backupPath}${suffix}`);
+            }
+        }
         if (await exists(dbPath)) {
             await copyFile(dbPath, backupPath);
+            if (await exists(`${dbPath}-wal`)) {
+                await copyFile(`${dbPath}-wal`, `${backupPath}-wal`);
+            }
             await CloudBackupApi.removeWithRetry(dbPath);
+        }
+        for (const suffix of ["-wal", "-shm"]) {
+            if (await exists(`${dbPath}${suffix}`)) {
+                await CloudBackupApi.removeWithRetry(`${dbPath}${suffix}`);
+            }
         }
 
         await copyFile(restorePath, dbPath);

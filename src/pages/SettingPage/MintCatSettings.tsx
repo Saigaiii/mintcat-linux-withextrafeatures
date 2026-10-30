@@ -2,6 +2,7 @@ import {t} from "i18next";
 import {openMintImport} from "@/dialogs/MintImportDialog";
 import {ModDescriptions} from "@/services/ModDescriptions";
 import {COLOR_PRESETS, ModListAppearance} from "@/services/ModListAppearance";
+import {useAdvancedShown} from "@/pages/SettingPage/AdvancedSettingsCard";
 import {CloudDownloadOutlined, DisconnectOutlined, LinkOutlined, ThunderboltOutlined} from "@ant-design/icons";
 import React from "react";
 import {openPath} from "@tauri-apps/plugin-opener";
@@ -49,6 +50,7 @@ export function MintCatSettings() {
     const [releaseChannel, setReleaseChannel] = React.useState<ReleaseChannel>(DEFAULT_RELEASE_CHANNEL);
     const descriptionHover = React.useSyncExternalStore(ModDescriptions.subscribe, ModDescriptions.isEnabled);
     const lookVersion = React.useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
+    const advanced = useAdvancedShown();
     const look = ModListAppearance.get(lookVersion);
     const [clipboardMonitor, setClipboardMonitor] = React.useState<boolean>(true);
     const [compressModPak, setCompressModPak] = React.useState<boolean>(false);
@@ -334,6 +336,7 @@ export function MintCatSettings() {
                   style={{marginBottom: "10px"}}
             >
                 <Form {...SettingLayout}>
+                    {advanced &&
                     <Form.Item label={t("Release channel")} tooltip={t("help.releaseChannel")}>
                         <Flex>
                             <Select value={releaseChannel}
@@ -341,7 +344,7 @@ export function MintCatSettings() {
                                     onChange={onReleaseChannelChange}
                             />
                         </Flex>
-                    </Form.Item>
+                    </Form.Item>}
                     <Form.Item label={t("UE4SS")} tooltip={t("help.ue4ss")}>
                         <Select<Ue4ssSetting> onChange={onUe4ssChange}
                                 value={ue4ss}
@@ -361,13 +364,14 @@ export function MintCatSettings() {
                                 onChange={onCompressModPakChange}
                         />
                     </Form.Item>
+                    {advanced &&
                     <Form.Item label={t("Dev Tools")} tooltip={t("help.devTools")}>
                         <Button type="dashed"
                                 {...ButtonLayout}
                                 onClick={onDevToolsClick}>
                             {t("Open Dev Tools")}
                         </Button>
-                    </Form.Item>
+                    </Form.Item>}
                 </Form>
             </Card>
         </>

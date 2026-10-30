@@ -161,7 +161,7 @@ export function CloudBackupSettings() {
     };
 
     return (
-        <Card title={t("Cloud Backup")} style={{ marginBottom: "10px" }}>
+        <Card title={t("cloudBackup.legacyTitle")} style={{ marginBottom: "10px" }}>
             <Typography.Paragraph type="secondary" style={{ marginTop: 0 }}>
                 {t("cloudBackup.help")}
             </Typography.Paragraph>

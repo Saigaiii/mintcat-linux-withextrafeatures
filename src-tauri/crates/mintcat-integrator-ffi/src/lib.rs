@@ -416,12 +416,27 @@ fn check_steam_game(exe_name: String) -> bool {
         // Match against the full command line so games running under
         // Proton/Wine are found too. The frontend passes names like
         // "FSD.exe" while the real Proton process is
-        // ".../FSD-Win64-Shipping.exe", so also try the stem ("FSD").
+        // ".../FSD-Win64-Shipping.exe", so also look for "<stem>-Win64-Shipping.exe".
+        // Only whole executable names count: a bare "FSD" also matched any
+        // program with a path through the game's FSD folder on its command line
+        // (a terminal, an editor, a file manager…), which blocked installs.
         let stem = exe_name
             .strip_suffix(".exe")
             .or_else(|| exe_name.strip_suffix(".EXE"))
             .unwrap_or(&exe_name);
-        [exe_name.as_str(), stem].iter().any(|pattern| {
+        let escape = |text: &str| {
+            text.chars()
+                .flat_map(|c| {
+                    let special = "\\.^$|?*+()[]{}".contains(c);
+                    special.then_some('\\').into_iter().chain(std::iter::once(c))
+                })
+                .collect::<String>()
+        };
+        let patterns = [
+            format!("(^|[/\\\\ ]){}( |$)", escape(&exe_name)),
+            format!("{}-Win64-Shipping\\.exe", escape(stem)),
+        ];
+        patterns.iter().any(|pattern| {
             std::process::Command::new("pgrep")
                 .args(["-f", pattern])
                 .output()

@@ -29,6 +29,7 @@ import {useFileDrop} from "@/hooks/useFileDrop";
 import {ModDescriptions} from "@/services/ModDescriptions";
 import {ModListAppearance} from "@/services/ModListAppearance";
 import {FolderColorDialog} from "@/dialogs/FolderColorDialog";
+import {Backups} from "@/services/Backups";
 
 import {SelectGameDialog} from "@/dialogs/SelectGameDialog";
 import {useKeyboardListener} from "@/hooks/useKeyboardListener.tsx";
@@ -112,6 +113,7 @@ const AppContent = () => {
                 console.log('[App] Core initialization complete');
                 ModDescriptions.init().catch(console.error);
                 ModListAppearance.init().catch(console.error);
+                Backups.startAuto();
                 setInitError(null);
                 setIsAppViewModelReady(true);
                 const completed = await DeviceApi.getOnboardingCompleted();

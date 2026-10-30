@@ -12,7 +12,7 @@ import {
     applyMintcatApiRoutingFromSettings,
 } from '@/apis/mintcat/routing';
 import { CacheApi } from '@/apis/CacheApi';
-import { closeDb } from '@/storage/db/Client';
+import { closeDb, initDb } from '@/storage/db/Client';
 import { setMintcatProxyModeResolved } from '@/services/network';
 import { taskQueueAPI, TaskPriority } from 'tauri-plugin-task-queue';
 
@@ -81,6 +81,7 @@ export class AppInitializer {
             this.currentPhase = InitPhase.Database;
             console.log('[AppInitializer] Initializing database...');
             await IoC.get(StorageAPI);
+            await this.ensureWalJournal();
 
             // Phase 2: Data Migration
             this.currentPhase = InitPhase.Migration;
@@ -189,6 +190,24 @@ export class AppInitializer {
      * 导致所有 mod 都被视为"版本锁定"状态。
      * 通过 settings 表的标记确保只执行一次。
      */
+    /**
+     * New databases are created in WAL mode (sqlx does that on creation), but a database put
+     * in place by a restore can be in rollback-journal mode, which sqlx then keeps. With the
+     * connection pool that mode lost writes in testing, so switch such a database back to WAL.
+     */
+    private static async ensureWalJournal(): Promise<void> {
+        try {
+            const db = await initDb();
+            const rows = await db.select<{ journal_mode?: string }[]>('PRAGMA journal_mode');
+            if (String(rows[0]?.journal_mode ?? '').toLowerCase() !== 'wal') {
+                await db.select('PRAGMA journal_mode=WAL');
+                console.log('[AppInitializer] Switched the database to WAL mode');
+            }
+        } catch (error) {
+            console.warn('[AppInitializer] Could not check the database journal mode', error);
+        }
+    }
+
     private static async fixUsedVersionData(): Promise<void> {
         try {
             const settings = await StorageAPI.getSettings();

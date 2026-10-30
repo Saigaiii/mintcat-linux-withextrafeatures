@@ -49,6 +49,8 @@ export interface RepositoryFile {
     fromThread: boolean;
     /** Newest upload of a file with this name in the post */
     latest: boolean;
+    /** Text of the message the file was posted with (often change notes for a new version) */
+    postText?: string;
 }
 
 export interface RepositoryModDetail {
@@ -143,6 +145,7 @@ export const RepositoryApi = {
                     postedBy: str(post?.postedBy, 'Unknown'),
                     fromThread,
                     latest: false,
+                    postText: str(post?.content).slice(0, 2000),
                 });
             }
         }

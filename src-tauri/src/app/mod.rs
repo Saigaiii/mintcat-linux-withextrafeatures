@@ -1,6 +1,6 @@
 pub mod devtools;
 
-use crate::{control_plane, download, frontend, hot_update, integrator, network};
+use crate::{backup, control_plane, download, frontend, hot_update, integrator, network};
 use tauri::{Emitter, Manager, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_sentry::{minidump, sentry};
 
@@ -134,6 +134,12 @@ pub fn run() {
             network::set_network_proxy,
             network::fetch_update_manifest,
             network::fetch_repository_json,
+            backup::zip_create,
+            backup::zip_list,
+            backup::zip_read_text,
+            backup::zip_extract,
+            backup::rclone_run,
+            backup::rclone_cancel,
             control_plane::control_plane_invoke,
             hot_update::get_control_plane_status,
             hot_update::get_hot_update_store_manifest,
