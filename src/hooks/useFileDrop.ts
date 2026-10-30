@@ -21,20 +21,41 @@ function isExternalDrag(e: DragEvent): boolean {
     return types.includes("Files") || types.includes("text/uri-list");
 }
 
-function droppedUris(dt: DataTransfer): string[] {
-    let list = "";
+function readType(dt: DataTransfer, type: string): string {
     try {
-        list = dt.getData("text/uri-list") || "";
+        return dt.getData(type) || "";
     } catch {
-        list = "";
+        return "";
     }
-    return list.split(/\r?\n/).map(line => line.trim()).filter(line => line && !line.startsWith("#"));
 }
 
-/** Paths of the dropped files, when the file manager provides them (text/uri-list). */
+/**
+ * The dropped files' file:// URIs and web links. WebKitGTK gives web content no File objects for a
+ * file manager's drop and blanks file URLs in text/uri-list, but keeps them in the text/html it
+ * builds for the drop (<a>file:///…</a>), so that is read too.
+ */
+function droppedUris(dt: DataTransfer): string[] {
+    const candidates: string[] = [...readType(dt, "text/uri-list").split(/\r?\n/)];
+    const html = readType(dt, "text/html");
+    if (html) {
+        const doc = new DOMParser().parseFromString(html, "text/html");
+        doc.querySelectorAll("a").forEach(a => {
+            candidates.push(a.getAttribute("href") ?? "");
+            candidates.push(...(a.textContent ?? "").split(/\s*\n\s*/));
+        });
+    }
+    candidates.push(...readType(dt, "text/plain").split(/\r?\n/));
+    const seen = new Set<string>();
+    return candidates
+        .map(line => line.trim())
+        .filter(line => /^(file|https?):\/\//i.test(line))
+        .filter(line => !seen.has(line) && !!seen.add(line));
+}
+
+/** Paths of the dropped files. */
 function droppedPaths(uris: string[]): string[] {
     return uris
-        .filter(line => line.startsWith("file://"))
+        .filter(line => line.toLowerCase().startsWith("file://"))
         .map(uri => {
             try {
                 return decodeURIComponent(new URL(uri).pathname);
