@@ -708,7 +708,7 @@
     "modDescription.none": "No description",
     "modDescription.failed": "Couldn't load the description: {{reason}}",
     "modDescription.loading": "Loading description…",
-    "modDescription.setting": "Show mod descriptions on hover",
+    "modDescription.setting": "Hover descriptions",
     "menu.browse": "Browse mods (mod.io and repositories)",
     "menu.modList": "Mod list",
     "mintImport.dropNotJson": "Drop a mint mod_data.json, .pak/.zip files or mod links here.",

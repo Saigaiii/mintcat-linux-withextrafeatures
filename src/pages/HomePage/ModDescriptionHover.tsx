@@ -51,7 +51,16 @@ export function ModDescriptionHover({mod, children}: { mod: DescribedMod; childr
     const enabled = useSyncExternalStore(ModDescriptions.subscribe, ModDescriptions.isEnabled);
     // A local mod gets a description once it is linked to a repository post
     const repoVersion = useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
-    if (!enabled || !ModDescriptions.describable(mod, repoVersion)) {
+    const show = enabled && ModDescriptions.describable(mod, repoVersion);
+    const ref = React.useRef<HTMLSpanElement>(null);
+
+    // The tree puts the mod's name in a title attribute on the row, which the system shows as a
+    // second tooltip on top of the description. React only rewrites it when the name changes.
+    React.useLayoutEffect(() => {
+        if (show) ref.current?.closest(".ant-tree-node-content-wrapper")?.removeAttribute("title");
+    });
+
+    if (!show) {
         return <>{children}</>;
     }
     return (
@@ -61,7 +70,7 @@ export function ModDescriptionHover({mod, children}: { mod: DescribedMod; childr
                  destroyOnHidden
                  styles={{root: {maxWidth: 480}}}>
             {/* the tooltip needs one element that takes mouse events */}
-            <span style={{display: "inline-flex", minWidth: 0}}>{children}</span>
+            <span ref={ref} style={{display: "inline-flex", minWidth: 0}}>{children}</span>
         </Tooltip>
     );
 }

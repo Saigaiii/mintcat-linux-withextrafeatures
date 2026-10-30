@@ -124,7 +124,20 @@ export const SearchBox = ({ onUpdateTreeView }: SearchBoxProps) => {
         typingTimer.current = setTimeout(() => onUpdateTreeView(), 200);
     }
 
-    const onSearchSelectChange = (value: string[]) => {
+    const onSearchSelectChange = (picked: string[]) => {
+        // Picking a filter clears the typed text; keep it as a filter of its own, unless it was
+        // typed to find that choice (e.g. "mod" → mod.io)
+        let value = picked;
+        const keyword = searchKeyword.trim();
+        if (keyword && !value.includes(keyword)) {
+            const added = value.filter(v => !(searchValue ?? []).includes(v));
+            const lower = keyword.toLocaleLowerCase();
+            const typedForChoice = added.some(v =>
+                v.toLocaleLowerCase().includes(lower) || getFilterLabel(v, t).toLocaleLowerCase().includes(lower));
+            if (added.length > 0 && !typedForChoice) {
+                value = [keyword, ...value];
+            }
+        }
         const nextValue = value.length ? value : undefined;
         clearTimeout(typingTimer.current);
         TreeViewConverter.filterList = nextValue ?? [];

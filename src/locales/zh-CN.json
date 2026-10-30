@@ -708,7 +708,7 @@
 	"modDescription.none": "没有简介",
 	"modDescription.failed": "无法加载简介：{{reason}}",
 	"modDescription.loading": "正在加载简介…",
-	"modDescription.setting": "悬停时显示模组简介",
+	"modDescription.setting": "悬停显示简介",
 	"menu.browse": "浏览模组（mod.io 和模组仓库）",
 	"menu.modList": "模组列表",
 	"mintImport.dropNotJson": "可以拖入 mint 的 mod_data.json、.pak/.zip 文件或模组链接。",
