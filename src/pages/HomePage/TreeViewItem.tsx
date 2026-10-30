@@ -2,7 +2,8 @@ import {t} from "i18next";
 import React, {useState, useSyncExternalStore} from "react";
 import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
 import {ModDescriptionHover} from "@/pages/HomePage/ModDescriptionHover";
-import {CloseCircleFilled, DisconnectOutlined, FolderOpenOutlined} from "@ant-design/icons";
+import {BgColorsOutlined, CloseCircleFilled, CloudDownloadOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined} from "@ant-design/icons";
+import {ModListAppearance, readableTextOn} from "@/services/ModListAppearance";
 import {
     ClockCircleOutlined,
     DeleteOutlined,
@@ -191,6 +192,8 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
     folders?: FolderInfo[];
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
 }) {
+    const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
+    const folderColor = ModListAppearance.folderColor(nodeData.key, lookVersion);
     // 过滤掉当前文件夹，避免移动到自身
     const moveToChildren: MenuProps['items'] = folders
         ?.filter(f => f.key !== nodeData.key)
@@ -205,6 +208,7 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
         {label: t('Add New Group'), key: 'add_new_group', icon: <FolderAddOutlined />},
         {label: t('Add Sub Group'), key: 'add_sub_group', icon: <FolderAddOutlined />},
         {label: t('Rename Group'), key: 'rename_group', icon: <EditOutlined />},
+        {label: t('folderColor.menu'), key: 'folder_color', icon: <BgColorsOutlined />},
         ...(moveToChildren.length > 0 ? [{
             label: t('Move To'),
             key: 'move_to',
@@ -223,6 +227,8 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
                           if (e.key.startsWith('move_to_folder-')) {
                               const targetFolderKey = e.key.replace('move_to_', '');
                               onMoveToFolder?.(nodeData.key, targetFolderKey);
+                          } else if (e.key === 'folder_color') {
+                              ModListAppearance.openFolderColor(nodeData.key, String(nodeData.title ?? ""));
                           } else {
                               onMenuClick(e.key, nodeData.key);
                           }
@@ -233,7 +239,8 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
                         display: "block",
                         paddingLeft: "6px",
                         borderRadius: "6px",
-                        backgroundColor: "rgba(238,238,238,0.2)",
+                        backgroundColor: folderColor ?? "rgba(238,238,238,0.2)",
+                        color: folderColor ? readableTextOn(folderColor) : undefined,
                     }}
                           onClick={(e) => e.stopPropagation()}
                           onMouseDown={(e) => e.stopPropagation()}
@@ -869,6 +876,9 @@ function ModTreeViewWarring({nodeData, onLocate}: { nodeData: any; onLocate?: ()
 
 
 function ModTreeViewProgressBackground({nodeData, children, onRowClick, ...restProps}: any) {
+    // Mods in a colored folder (or a subfolder of one) get a stripe of its color
+    const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
+    const folderColor = ModListAppearance.colorForPath(nodeData.folderPath, lookVersion);
     const [downloadProgress, setDownloadProgress] = useState(() =>
         getCachedDownloadProgress(nodeData.modId, nodeData.downloadProgress)
     );
@@ -923,6 +933,7 @@ function ModTreeViewProgressBackground({nodeData, children, onRowClick, ...restP
             borderRadius: "4px",
             padding: "2px 4px",
             transition: "background 0.3s ease",
+            ...(folderColor ? {boxShadow: `inset 3px 0 0 ${folderColor}`} : {}),
             ...progressStyle
         }} {...restProps}
             onClick={onClick}
@@ -1000,17 +1011,50 @@ function ModTreeViewLocalTitle({nodeData}) {
     const showPath = useShowLocalPaths();
     const filePath: string = nodeData.url || "";
 
+    // How the mod is linked to a repository post (Pak Hub): its own color and icon when turned on
+    const repoVersion = useSyncExternalStore(RepositoryUpdates.subscribe, RepositoryUpdates.version);
+    const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
+    const link = RepositoryUpdates.linkForModAt({modId: nodeData.modId, url: nodeData.url}, repoVersion);
+    const look = ModListAppearance.get(lookVersion);
+    const autoColor = link?.via === 'auto' && look.autoLinkColorEnabled ? look.autoLinkColor : undefined;
+    const nameStyle: React.CSSProperties = autoColor
+        ? {color: autoColor, opacity: enabled ? 1 : 0.55}
+        : {color: enabled ? token.colorText : token.colorTextSecondary};
+    const linkIcon = look.linkIcons ? (
+        <Tooltip mouseEnterDelay={0.3} title={
+            !link ? t("linkIcon.none")
+                : link.via === 'auto' ? t("linkIcon.auto")
+                    : link.via === 'added' ? t("linkIcon.added")
+                        : t("linkIcon.manual")
+        }>
+            <span style={{
+                marginRight: 6,
+                flexShrink: 0,
+                color: !link ? token.colorTextQuaternary
+                    : link.via === 'auto' ? (look.autoLinkColor || token.colorInfo)
+                        : token.colorTextSecondary,
+            }}>
+                {!link ? <DisconnectOutlined/>
+                    : link.via === 'auto' ? <ThunderboltOutlined/>
+                        : link.via === 'added' ? <CloudDownloadOutlined/>
+                            : <LinkOutlined/>}
+            </span>
+        </Tooltip>
+    ) : null;
+
     if (!showPath || !filePath) {
         return (
-            <span style={{color: enabled ? token.colorText : token.colorTextSecondary}}>
-                {nodeData.title}
+            <span style={{display: "inline-flex", alignItems: "center", minWidth: 0}}>
+                {linkIcon}
+                <span style={nameStyle}>{nodeData.title}</span>
             </span>
         );
     }
     return (
         <span style={{display: "inline-flex", flexDirection: "column", minWidth: 0, lineHeight: 1.25, padding: "1px 0"}}>
-            <span style={{color: enabled ? token.colorText : token.colorTextSecondary}}>
-                {nodeData.title}
+            <span style={{display: "inline-flex", alignItems: "center", minWidth: 0}}>
+                {linkIcon}
+                <span style={nameStyle}>{nodeData.title}</span>
             </span>
             <span title={filePath}
                   style={{

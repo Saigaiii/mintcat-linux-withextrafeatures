@@ -1,0 +1,150 @@
+/**
+ * How the mod list looks: folder colors (right-click a folder → Folder color, like separator
+ * colors in Amethyst), a color for local mods linked to a repository post automatically, and
+ * icons that show how a local mod is linked. Saved in the settings table.
+ */
+import {StorageAPI} from "@/storage";
+
+const SETTINGS_KEY = "ui.modListAppearance";
+
+export interface ModListLook {
+    /** Color the names of local mods that were linked to a repository post automatically */
+    autoLinkColorEnabled: boolean;
+    autoLinkColor: string;
+    /** Icons in front of local mods: linked automatically / downloaded from / linked by you / not linked */
+    linkIcons: boolean;
+    /** Folder key ("folder-12") → color */
+    folderColors: Record<string, string>;
+}
+
+export const DEFAULT_AUTO_LINK_COLOR = "#36cfc9";
+
+/** Swatches offered for folders and the auto-link color */
+export const COLOR_PRESETS = [
+    "#f5222d", "#fa541c", "#fa8c16", "#faad14", "#fadb14", "#a0d911",
+    "#52c41a", "#13c2c2", "#36cfc9", "#1677ff", "#2f54eb", "#722ed1",
+    "#eb2f96", "#8c8c8c",
+];
+
+let look: ModListLook = {
+    autoLinkColorEnabled: false,
+    autoLinkColor: DEFAULT_AUTO_LINK_COLOR,
+    linkIcons: false,
+    folderColors: {},
+};
+let version = 0;
+const listeners = new Set<() => void>();
+let editingFolder: { key: string; name: string } | null = null;
+
+function notify() {
+    version++;
+    listeners.forEach(l => l());
+}
+
+async function persist() {
+    try {
+        const settings = await StorageAPI.getSettings();
+        await settings.setValue(SETTINGS_KEY, JSON.stringify(look));
+    } catch (e) {
+        console.error("[ModListAppearance] could not save", e);
+    }
+}
+
+function isColor(value: unknown): value is string {
+    return typeof value === "string" && /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value);
+}
+
+/** Black or white text for a background color */
+export function readableTextOn(color: string): string {
+    const hex = color.replace("#", "").slice(0, 6);
+    const [r, g, b] = [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
+        .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    return luminance > 0.4 ? "#141414" : "#ffffff";
+}
+
+export const ModListAppearance = {
+    subscribe(listener: () => void): () => void {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+    },
+
+    version(): number {
+        return version;
+    },
+
+    async init(): Promise<void> {
+        try {
+            const settings = await StorageAPI.getSettings();
+            const raw = await settings.getValue(SETTINGS_KEY);
+            const parsed = raw ? JSON.parse(raw) : {};
+            const folderColors: Record<string, string> = {};
+            for (const [k, v] of Object.entries(parsed.folderColors ?? {})) {
+                if (isColor(v)) folderColors[k] = v;
+            }
+            look = {
+                autoLinkColorEnabled: parsed.autoLinkColorEnabled === true,
+                autoLinkColor: isColor(parsed.autoLinkColor) ? parsed.autoLinkColor : DEFAULT_AUTO_LINK_COLOR,
+                linkIcons: parsed.linkIcons === true,
+                folderColors,
+            };
+            notify();
+        } catch (e) {
+            console.warn("[ModListAppearance] could not load", e);
+        }
+    },
+
+    /** Current settings; `_version` only makes callers re-read when they change */
+    get(_version: number): ModListLook {
+        return look;
+    },
+
+    async update(changes: Partial<Omit<ModListLook, "folderColors">>): Promise<void> {
+        look = {...look, ...changes};
+        notify();
+        await persist();
+    },
+
+    folderColor(folderKey: string, _version: number): string | undefined {
+        return look.folderColors[folderKey];
+    },
+
+    /** Color of the nearest colored folder in a path of folder keys (outermost first) */
+    colorForPath(folderKeys: string[] | undefined, _version: number): string | undefined {
+        for (let i = (folderKeys?.length ?? 0) - 1; i >= 0; i--) {
+            const color = look.folderColors[folderKeys![i]];
+            if (color) return color;
+        }
+        return undefined;
+    },
+
+    async setFolderColor(folderKey: string, color: string | null): Promise<void> {
+        const folderColors = {...look.folderColors};
+        if (color && isColor(color)) folderColors[folderKey] = color;
+        else delete folderColors[folderKey];
+        look = {...look, folderColors};
+        notify();
+        await persist();
+    },
+
+    async clearFolderColors(): Promise<void> {
+        look = {...look, folderColors: {}};
+        notify();
+        await persist();
+    },
+
+    /** Folder whose color is being chosen (the Folder color dialog shows while set) */
+    editing(_version: number): { key: string; name: string } | null {
+        return editingFolder;
+    },
+
+    openFolderColor(key: string, name: string): void {
+        editingFolder = {key, name};
+        notify();
+    },
+
+    closeFolderColor(): void {
+        editingFolder = null;
+        notify();
+    },
+};

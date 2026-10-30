@@ -1,6 +1,8 @@
 import {t} from "i18next";
 import {openMintImport} from "@/dialogs/MintImportDialog";
 import {ModDescriptions} from "@/services/ModDescriptions";
+import {COLOR_PRESETS, ModListAppearance} from "@/services/ModListAppearance";
+import {CloudDownloadOutlined, DisconnectOutlined, LinkOutlined, ThunderboltOutlined} from "@ant-design/icons";
 import React from "react";
 import {openPath} from "@tauri-apps/plugin-opener";
 import {open} from "@tauri-apps/plugin-dialog";
@@ -9,7 +11,7 @@ import {IntegrateApi} from "@/apis/IntegrateApi.ts";
 import {CacheApi} from "@/apis/CacheApi.ts";
 import {DEFAULT_RELEASE_CHANNEL, RELEASE_CHANNELS, type ReleaseChannel} from "@/apis/mintcat";
 import {StorageAPI} from "@/storage";
-import {Button, Card, Flex, Form, Input, message, Modal, Select, Switch} from "antd";
+import {Button, Card, ColorPicker, Flex, Form, Input, message, Modal, Select, Switch, Typography} from "antd";
 import {ExclamationCircleFilled} from "@ant-design/icons";
 import {FolderAddOutlined} from "@ant-design/icons";
 import {ClipboardApi} from "@/apis/ClipboardApi.ts";
@@ -46,6 +48,8 @@ export function MintCatSettings() {
     const [ue4ss, setUe4ss] = React.useState<Ue4ssSetting>(UE4SS_SETTING_ENABLED);
     const [releaseChannel, setReleaseChannel] = React.useState<ReleaseChannel>(DEFAULT_RELEASE_CHANNEL);
     const descriptionHover = React.useSyncExternalStore(ModDescriptions.subscribe, ModDescriptions.isEnabled);
+    const lookVersion = React.useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
+    const look = ModListAppearance.get(lookVersion);
     const [clipboardMonitor, setClipboardMonitor] = React.useState<boolean>(true);
     const [compressModPak, setCompressModPak] = React.useState<boolean>(false);
 
@@ -278,12 +282,51 @@ export function MintCatSettings() {
                                 onChange={onClipboardMonitorChange}
                         />
                     </Form.Item>
+                </Form>
+            </Card>
+            <Card title={t("modList.settingsTitle")}
+                  style={{marginBottom: "10px"}}
+            >
+                <Form {...SettingLayout}>
                     <Form.Item label={t("modDescription.setting")} tooltip={t("help.descriptionHover")}>
                         <Switch checked={descriptionHover}
                                 onChange={(checked) => {
                                     void ModDescriptions.setEnabled(checked);
                                 }}
                         />
+                    </Form.Item>
+                    <Form.Item label={t("modList.autoLinkColor")} tooltip={t("help.autoLinkColor")}>
+                        <Flex gap={12} align="center">
+                            <Switch checked={look.autoLinkColorEnabled}
+                                    onChange={(checked) => void ModListAppearance.update({autoLinkColorEnabled: checked})}/>
+                            <ColorPicker value={look.autoLinkColor}
+                                         disabled={!look.autoLinkColorEnabled}
+                                         disabledAlpha
+                                         showText
+                                         presets={[{label: t("modList.presets"), colors: COLOR_PRESETS}]}
+                                         onChangeComplete={(c) => void ModListAppearance.update({autoLinkColor: c.toHexString()})}/>
+                        </Flex>
+                    </Form.Item>
+                    <Form.Item label={t("modList.linkIcons")} tooltip={t("help.linkIcons")}>
+                        <Flex gap={12} align="center" wrap>
+                            <Switch checked={look.linkIcons}
+                                    onChange={(checked) => void ModListAppearance.update({linkIcons: checked})}/>
+                            <Typography.Text type="secondary" style={{fontSize: 12}}>
+                                <ThunderboltOutlined/> {t("modList.iconAuto")}
+                                &nbsp;&nbsp;<CloudDownloadOutlined/> {t("modList.iconAdded")}
+                                &nbsp;&nbsp;<LinkOutlined/> {t("modList.iconManual")}
+                                &nbsp;&nbsp;<DisconnectOutlined/> {t("modList.iconNone")}
+                            </Typography.Text>
+                        </Flex>
+                    </Form.Item>
+                    <Form.Item label={t("modList.folderColors")} tooltip={t("help.folderColors")}>
+                        <Flex gap={12} align="center">
+                            <Typography.Text type="secondary">{t("modList.folderColorsHint")}</Typography.Text>
+                            {Object.keys(look.folderColors).length > 0 &&
+                                <Button size="small" onClick={() => void ModListAppearance.clearFolderColors()}>
+                                    {t("modList.clearFolderColors")}
+                                </Button>}
+                        </Flex>
                     </Form.Item>
                 </Form>
             </Card>

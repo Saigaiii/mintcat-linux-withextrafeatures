@@ -99,12 +99,12 @@ export class TreeViewConverter {
     /**
      * 递归构建 TreeView 节点
      */
-    private buildTreeNode(parent: any, root: ProfileTreeItem): void {
+    private buildTreeNode(parent: any, root: ProfileTreeItem, folderPath: string[] = []): void {
         for (const item of root.children) {
             if (item.type === ProfileTreeType.ITEM) {
-                this.buildModNode(parent, item);
+                this.buildModNode(parent, item, folderPath);
             } else if (item.type === ProfileTreeType.FOLDER) {
-                this.buildFolderNode(parent, item);
+                this.buildFolderNode(parent, item, folderPath);
             }
         }
     }
@@ -112,7 +112,7 @@ export class TreeViewConverter {
     /**
      * 构建 Mod 节点
      */
-    private buildModNode(parent: any, item: ProfileTreeItem): void {
+    private buildModNode(parent: any, item: ProfileTreeItem, folderPath: string[] = []): void {
         const modItem = this.modList?.find(m => m.modId === item.id);
         if (!modItem) {
             console.warn(`[TreeViewConverter] Mod item not found for id=${item.id}`);
@@ -152,13 +152,15 @@ export class TreeViewConverter {
             onlineUpdateDate: modItem.status?.onlineUpdateDate || 0,
             onlineAvailable: modItem.status?.isOnlineAvailable ?? true,
             localNoFound: modItem.status?.isLocalNotFound ?? false,
+            // Keys of the folders this mod is in, outermost first (for folder colors)
+            folderPath,
         });
     }
 
     /**
      * 构建文件夹节点
      */
-    private buildFolderNode(parent: any, item: ProfileTreeItem): void {
+    private buildFolderNode(parent: any, item: ProfileTreeItem, folderPath: string[] = []): void {
         const key = `folder-${item.id}`;
         this.expandedKeys.push(key);
 
@@ -170,7 +172,7 @@ export class TreeViewConverter {
         }
 
         parent.children.push(node);
-        this.buildTreeNode(node, item); // 递归处理子节点
+        this.buildTreeNode(node, item, [...folderPath, key]); // 递归处理子节点
     }
 
     // ====================================
