@@ -3,7 +3,7 @@ use mintcat_integrator_api::{ConflictCheckModInfo, ModConflict};
 use std::collections::HashMap;
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::io::BufReader;
+use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -11,6 +11,8 @@ use walkdir::WalkDir;
 #[derive(Debug, Clone)]
 enum FileSource {
     Pak { pak: PathBuf, entry: String },
+    /// A pak inside a zip: mod.io downloads are kept as the zip mod.io serves
+    ZipPak { zip: PathBuf, pak: String, entry: String },
     Disk(PathBuf),
 }
 
@@ -57,6 +59,65 @@ fn get_pak_files(pak_path: &str) -> anyhow::Result<ModFiles> {
             )
         })
         .collect())
+}
+
+/// A zip (mod.io download) rather than a pak: starts with "PK\x03\x04"
+fn is_zip(path: &Path) -> bool {
+    let mut head = [0u8; 4];
+    fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .map(|_| head == [0x50, 0x4B, 0x03, 0x04])
+        .unwrap_or(false)
+}
+
+/// The paks in a zip (any folder), read into memory one at a time by the caller
+fn zip_pak_names(zip_path: &Path) -> anyhow::Result<Vec<String>> {
+    let file = fs::File::open(zip_path)
+        .with_context(|| format!("Failed to open zip: {}", zip_path.display()))?;
+    let archive = zip::ZipArchive::new(BufReader::new(file))
+        .with_context(|| format!("Failed to read zip: {}", zip_path.display()))?;
+    Ok(archive
+        .file_names()
+        .filter(|n| n.to_lowercase().ends_with(".pak"))
+        .map(|n| n.to_string())
+        .collect())
+}
+
+fn read_zip_entry(zip_path: &Path, name: &str) -> anyhow::Result<Vec<u8>> {
+    let file = fs::File::open(zip_path)
+        .with_context(|| format!("Failed to open zip: {}", zip_path.display()))?;
+    let mut archive = zip::ZipArchive::new(BufReader::new(file))?;
+    let mut entry = archive.by_name(name)?;
+    let mut data = Vec::with_capacity(entry.size() as usize);
+    entry.read_to_end(&mut data)?;
+    Ok(data)
+}
+
+/// Files of every pak in a zip. A pak that can't be read is left out (and reported).
+fn get_zip_files(zip_path: &str) -> anyhow::Result<ModFiles> {
+    let path = PathBuf::from(zip_path);
+    let mut files = Vec::new();
+    for name in zip_pak_names(&path)? {
+        let parsed = read_zip_entry(&path, &name).and_then(|data| {
+            let mut cursor = Cursor::new(data.as_slice());
+            let pak = repak::PakBuilder::new()
+                .reader(&mut cursor)
+                .with_context(|| format!("Failed to parse {} in {}", name, path.display()))?;
+            Ok((pak.mount_point().to_string(), pak.files()))
+        });
+        match parsed {
+            Ok((mount_point, entries)) => {
+                for entry in entries {
+                    files.push((
+                        normalize_pak_entry(&mount_point, &entry),
+                        FileSource::ZipPak { zip: path.clone(), pak: name.clone(), entry },
+                    ));
+                }
+            }
+            Err(error) => eprintln!("Skipping a pak in a mod zip: {:#}", error),
+        }
+    }
+    Ok(files)
 }
 
 fn content_prefix_for_game(game_name: Option<&str>) -> &'static str {
@@ -144,6 +205,7 @@ fn fingerprint(data: &[u8]) -> String {
 fn fingerprint_files(files: &[(&String, &FileSource)]) -> HashMap<String, String> {
     let mut out = HashMap::new();
     let mut by_pak: HashMap<&PathBuf, Vec<(&String, &String)>> = HashMap::new();
+    let mut by_zip_pak: HashMap<(&PathBuf, &String), Vec<(&String, &String)>> = HashMap::new();
 
     for (path, source) in files {
         match source {
@@ -153,6 +215,18 @@ fn fingerprint_files(files: &[(&String, &FileSource)]) -> HashMap<String, String
                 }
             }
             FileSource::Pak { pak, entry } => by_pak.entry(pak).or_default().push((path, entry)),
+            FileSource::ZipPak { zip, pak, entry } => by_zip_pak.entry((zip, pak)).or_default().push((path, entry)),
+        }
+    }
+
+    for ((zip_path, pak_name), entries) in by_zip_pak {
+        let Ok(data) = read_zip_entry(zip_path, pak_name) else { continue };
+        let mut cursor = Cursor::new(data.as_slice());
+        let Ok(pak) = repak::PakBuilder::new().reader(&mut cursor) else { continue };
+        for (path, entry) in entries {
+            if let Ok(bytes) = pak.get(entry, &mut cursor) {
+                out.insert(path.clone(), fingerprint(&bytes));
+            }
         }
     }
 
@@ -189,6 +263,10 @@ pub fn check_mod_conflicts(
     for mod_info in mods {
         let files = if mod_info.is_unpacked {
             get_directory_mod_pak_files(&mod_info.cache_path, content_prefix)
+        } else if is_zip(Path::new(&mod_info.cache_path)) {
+            // mod.io downloads: these were skipped before (read as a pak, which failed), so
+            // conflicts between mod.io mods never showed
+            get_zip_files(&mod_info.cache_path)
         } else {
             get_pak_files(&mod_info.cache_path)
         };
@@ -373,5 +451,66 @@ mod tests {
         assert_ne!(h(1, "fsd/content/gun.uasset"), h(2, "fsd/content/gun.uasset"));
         assert!(h(3, "fsd/content/gun.uasset").is_none(), "mod 3 doesn't have the gun");
         assert_eq!((by_id[&1].total_files, by_id[&3].total_files), (2, 1));
+    }
+
+    /// A mod.io download: the zip mod.io serves, with the pak inside (maybe in a folder)
+    fn write_zip_with_paks(path: &std::path::Path, paks: &[(&str, &std::path::Path)]) {
+        use std::io::Write;
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("readme.txt", options).unwrap();
+        zip.write_all(b"not a pak").unwrap();
+        for (name, pak) in paks {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(&fs::read(pak).unwrap()).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn mod_io_zips_are_checked_too() {
+        let dir = tempfile::tempdir().unwrap();
+        // two versions of the same icon mod, as mod.io zips, and a plain local pak
+        let icons = dir.path().join("icons.pak");
+        let sticky = dir.path().join("sticky.pak");
+        let local = dir.path().join("local.pak");
+        write_pak_with(&icons, &[("FSD/Content/UI/Icon_Stasis.uasset", b"icon"), ("FSD/Content/UI/Icon_Snow.uasset", b"snow v1")]);
+        write_pak_with(&sticky, &[("FSD/Content/UI/Icon_Stasis.uasset", b"icon"), ("FSD/Content/UI/Icon_Snow.uasset", b"snow v2"),
+            ("FSD/Content/UI/Icon_Sticky.uasset", b"sticky")]);
+        write_pak_with(&local, &[("FSD/Content/UI/Icon_Sticky.uasset", b"sticky")]);
+        let zip_a = dir.path().join("modio-1-icons.zip");
+        let zip_b = dir.path().join("modio-2-sticky.zip");
+        write_zip_with_paks(&zip_a, &[("icons.pak", &icons)]);
+        write_zip_with_paks(&zip_b, &[("folder/sticky.pak", &sticky)]);
+
+        let result = check_mod_conflicts(&[info(1, &zip_a), info(2, &zip_b), info(3, &local)], None);
+        let by_id: HashMap<i64, &ModConflict> = result.iter().map(|m| (m.mod_id, m)).collect();
+        let mut files_1 = by_id[&1].conflicting_files.clone();
+        files_1.sort();
+        assert_eq!(files_1, vec!["fsd/content/ui/icon_snow.uasset", "fsd/content/ui/icon_stasis.uasset"]);
+        let mut others_2 = by_id[&2].conflicting_mods.clone();
+        others_2.sort();
+        assert_eq!(others_2, vec![1, 3]);
+        assert_eq!(by_id[&3].conflicting_mods, vec![2]);
+        assert_eq!((by_id[&1].total_files, by_id[&2].total_files), (2, 3));
+
+        // fingerprints read from inside the zips: same bytes match, different don't, also vs a plain pak
+        let h = |id: i64, f: &str| by_id[&id].file_hashes.get(f).cloned();
+        assert!(h(1, "fsd/content/ui/icon_stasis.uasset").is_some());
+        assert_eq!(h(1, "fsd/content/ui/icon_stasis.uasset"), h(2, "fsd/content/ui/icon_stasis.uasset"));
+        assert_ne!(h(1, "fsd/content/ui/icon_snow.uasset"), h(2, "fsd/content/ui/icon_snow.uasset"));
+        assert_eq!(h(2, "fsd/content/ui/icon_sticky.uasset"), h(3, "fsd/content/ui/icon_sticky.uasset"));
+    }
+
+    #[test]
+    fn a_broken_zip_is_left_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let bad = dir.path().join("bad.zip");
+        fs::write(&bad, b"PK\x03\x04 not really a zip").unwrap();
+        let a = dir.path().join("a.pak");
+        write_pak_with(&a, &[("FSD/Content/X.uasset", b"x")]);
+        assert!(check_mod_conflicts(&[info(1, &bad), info(2, &a)], None).is_empty());
     }
 }
