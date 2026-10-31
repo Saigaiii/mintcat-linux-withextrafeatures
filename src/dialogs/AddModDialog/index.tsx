@@ -1,6 +1,6 @@
 import React from 'react';
 import {t} from "i18next";
-import {Button, Flex, Form, message, Select, Tabs} from 'antd';
+import {Button, Flex, Form, message, Select, Tabs, Typography} from 'antd';
 import {emitEvent, emitVoidEvent, listenEvent, type UnlistenFn} from "@/events";
 import {LocalTab} from "@/dialogs/AddModDialog/LocalTab.tsx";
 import {OnlineTab} from "@/dialogs/AddModDialog/OnlineTab.tsx";
@@ -11,6 +11,15 @@ import {DialogProfileService} from "@/services/DialogProfileService.ts";
 import {AppInitializer} from "@/core/AppInitializer";
 import {registerIoC} from "@/core/IoCRegistration.ts";
 import {mergeLines} from "@/utils/LocalModPaths";
+import {
+    countElsewhere,
+    type FolderOverrides,
+    followNewDefault,
+    itemKey,
+    type ItemFolders,
+    ownFolders,
+    setItemFolder,
+} from "@/dialogs/AddModDialog/ItemFolders";
 
 export enum AddModType {
     ONLINE = "online",
@@ -29,6 +38,10 @@ interface AddModDialogStates {
     textRevision?: number;
     paths?: string[];
     pathsRevision?: number;
+    /** Mods given another folder than the dialog's, by item key */
+    folderOverrides?: FolderOverrides;
+    /** Each tab's listed mods (item keys), to count those going elsewhere */
+    itemKeys?: Record<string, string[]>;
 }
 
 export interface AddModDialogResult {
@@ -38,6 +51,10 @@ export interface AddModDialogResult {
     modInfoList?: any[];
     onlineList?: string[];
     localList?: string[];
+    /** Mods going to another folder than groupId: file path / link / mod.io id → folder id */
+    localFolders?: Record<string, number>;
+    onlineFolders?: Record<string, number>;
+    subscribedFolders?: Record<string, number>;
 }
 
 export class AddModDialog extends BasePage<any, AddModDialogStates> {
@@ -55,7 +72,48 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
             addModType: AddModType.LOCAL,
             groupId: 0,
             groupOptions: [],
+            folderOverrides: {},
+            itemKeys: {},
         }
+    }
+
+    @autoBind
+    private setItemFolder(key: string, folderId: number) {
+        this.setState(prev => ({
+            folderOverrides: setItemFolder(prev.folderOverrides ?? {}, key, folderId, prev.groupId ?? 0),
+        }));
+    }
+
+    @autoBind
+    private reportItems(prefix: string, keys: string[]) {
+        this.setState(prev => {
+            const current = prev.itemKeys?.[prefix] ?? [];
+            if (current.length === keys.length && current.every((k, i) => k === keys[i])) return null;
+            return {itemKeys: {...(prev.itemKeys ?? {}), [prefix]: keys}};
+        });
+    }
+
+    /** Listed mods of the tabs OK would add from */
+    private submittedKeys(): string[] {
+        const keys = this.state.itemKeys ?? {};
+        return this.state.addModType === AddModType.SUBSCRIBED
+            ? keys.modio ?? []
+            : [...(keys.local ?? []), ...(keys.link ?? [])];
+    }
+
+    @autoBind
+    private putAllInDialogFolder() {
+        this.setState({folderOverrides: {}});
+    }
+
+    private itemFolders(): ItemFolders {
+        return {
+            options: this.state.groupOptions ?? [],
+            defaultId: this.state.groupId ?? 0,
+            overrides: this.state.folderOverrides ?? {},
+            set: this.setItemFolder,
+            report: this.reportItems,
+        };
     }
 
 
@@ -95,12 +153,21 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
             return;
         }
 
+        const overrides = this.state.folderOverrides ?? {};
+        const groupId = this.state.groupId!;
         await emitEvent('add-mod-dialog-ok', {
-            groupId: this.state.groupId!,
+            groupId,
             addModType: this.state.addModType!,
             list: list,
             modInfoList: modInfoList,
-            ...(isFileOrLinkTab ? {onlineList, localList} : {}),
+            ...(isFileOrLinkTab ? {
+                onlineList,
+                localList,
+                localFolders: ownFolders(localList, itemKey.local, overrides, groupId),
+                onlineFolders: ownFolders(onlineList, itemKey.link, overrides, groupId),
+            } : {
+                subscribedFolders: ownFolders((modInfoList ?? []).map((m: any) => String(m.id)), itemKey.modio, overrides, groupId),
+            }),
         });
     }
 
@@ -142,9 +209,11 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
 
     @autoBind
     private onSelectGroupChange(value: number) {
-        this.setState({
-            groupId: value
-        });
+        // mods given the newly chosen folder simply follow it now
+        this.setState(prev => ({
+            groupId: value,
+            folderOverrides: followNewDefault(prev.folderOverrides ?? {}, value),
+        }));
         // 缓存用户选择的文件夹
         localStorage.setItem(LAST_SELECTED_GROUP_KEY, String(value));
     }
@@ -265,6 +334,9 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
     }
 
     render() {
+        const folders = this.itemFolders();
+        const elsewhere = countElsewhere(folders.overrides, this.submittedKeys(), folders.defaultId);
+        const canPick = folders.options.length > 1;
         return (
             <div className="add-mod-dialog"
                  style={{
@@ -281,7 +353,8 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
                                   forceRender: true,
                                   children: <LocalTab ref={this.localFormRef}
                                                       paths={this.state.paths}
-                                                      revision={this.state.pathsRevision}/>,
+                                                      revision={this.state.pathsRevision}
+                                                      folders={folders}/>,
                               },
                               {
                                   key: AddModType.ONLINE,
@@ -289,20 +362,29 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
                                   forceRender: true,
                                   children: <OnlineTab ref={this.onlineFormRef}
                                                        text={this.state.text}
-                                                       revision={this.state.textRevision}/>,
+                                                       revision={this.state.textRevision}
+                                                       folders={folders}/>,
                               },
                               {
                                   key: AddModType.SUBSCRIBED,
                                   label: t("mod.io Subscribed"),
-                                  children: <SubscribedTab ref={this.subscribedFormRef}/>,
+                                  children: <SubscribedTab ref={this.subscribedFormRef} folders={folders}/>,
                               }
                           ]
                       }>
                 </Tabs>
                 <Form layout="vertical">
                     <Form.Item name="groupId"
-                               label={t("Group")}
-                               rules={[{required: true}]}>
+                               label={t("addMod.folder")}
+                               rules={[{required: true}]}
+                               extra={canPick
+                                   ? (elsewhere > 0
+                                       ? <span>
+                                           {t("addMod.otherFolders", {count: elsewhere})}{" "}
+                                           <Typography.Link onClick={this.putAllInDialogFolder}>{t("addMod.allHere")}</Typography.Link>
+                                       </span>
+                                       : t("addMod.folderHint"))
+                                   : undefined}>
                         <Flex>
                             <Select value={this.state.groupId}
                                     options={this.state.groupOptions}

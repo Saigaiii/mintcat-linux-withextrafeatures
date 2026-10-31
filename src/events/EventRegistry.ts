@@ -79,6 +79,10 @@ export interface EventPayloads {
     /** Both tabs' contents, so links and files gathered together are all added */
     onlineList?: string[];
     localList?: string[];
+    /** Mods going to another folder than groupId: file path / link / mod.io mod id → folder id */
+    localFolders?: Record<string, number>;
+    onlineFolders?: Record<string, number>;
+    subscribedFolders?: Record<string, number>;
   };
 
   /** 添加模组对话框关闭 */

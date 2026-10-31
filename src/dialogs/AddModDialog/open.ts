@@ -22,6 +22,9 @@ import {path as tauriPath} from "@tauri-apps/api";
 import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
 import {isModArchivePath, parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
 import {ActivityLog, logActivity} from "@/services/ActivityLog";
+import {DialogProfileService} from "@/services/DialogProfileService.ts";
+import {byFolder, folderFor} from "@/dialogs/AddModDialog/ItemFolders";
+import type {ModInfo} from "@/apis/modio/ModInfo.ts";
 
 let windowInstance: WebviewWindow;
 
@@ -68,8 +71,8 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
 
     windowInstance = new WebviewWindow('add-mod-dialog', {
         url: frontendRouteUrl(`/add_mod_dialog?init=${encodeURIComponent(JSON.stringify(initData))}`),
-        width: 400,
-        height: 620,
+        width: 480,
+        height: 640,
         title: t("Add Mod"),
         dragDropEnabled: true,
     });
@@ -85,16 +88,31 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
         let addProblems = 0;
         let addExists = 0;
         let addTotal = 0;
+        // Each mod goes to the folder picked for it, else the dialog's folder
+        const folders = await folderLabels();
+        const validIds = new Set(folders.keys());
+        const place = (own: Record<string, number> | undefined) => (item: string): Placed => {
+            const folderId = folderFor(own, item, result.groupId, validIds);
+            return {folderId, folderName: folders.get(folderId)};
+        };
 
         switch (result.addModType) {
             case AddModType.SUBSCRIBED: {
-                if (result.modInfoList && result.modInfoList.length > 0) {
-                    const batchResult = await vm.addModsFromSubscribed(result.modInfoList, result.groupId);
-                    if (batchResult.existsCount > 0) {
-                        message.warning(t("Mod Already Exists") + ` (${batchResult.existsCount} ${t("in current list")})`);
+                const modInfoList: ModInfo[] = result.modInfoList ?? [];
+                if (modInfoList.length > 0) {
+                    const folderOf = place(result.subscribedFolders);
+                    let existsCount = 0;
+                    let errorCount = 0;
+                    for (const [folderId, infos] of byFolder(modInfoList, m => folderOf(String(m.id)).folderId)) {
+                        const batchResult = await vm.addModsFromSubscribed(infos, folderId);
+                        existsCount += batchResult.existsCount;
+                        errorCount += batchResult.errorCount;
                     }
-                    if (batchResult.errorCount > 0) {
-                        message.warning(t("mod.someFailedToAdd") + `: ${batchResult.errorCount}/${result.modInfoList.length}`);
+                    if (existsCount > 0) {
+                        message.warning(t("Mod Already Exists") + ` (${existsCount} ${t("in current list")})`);
+                    }
+                    if (errorCount > 0) {
+                        message.warning(t("mod.someFailedToAdd") + `: ${errorCount}/${modInfoList.length}`);
                     }
                 }
                 break;
@@ -109,10 +127,10 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
 
                 const outcomes: AddOutcome[] = [];
                 if (localList.length > 0) {
-                    outcomes.push(await addLocalMods(vm, localList, result.groupId));
+                    outcomes.push(await addLocalMods(vm, localList, place(result.localFolders)));
                 }
                 if (onlineList.length > 0) {
-                    outcomes.push(await addOnlineMods(vm, onlineList, result.groupId));
+                    outcomes.push(await addOnlineMods(vm, onlineList, place(result.onlineFolders)));
                 }
                 addProblems = outcomes.reduce((n, o) => n + o.problems, 0);
                 addExists = outcomes.reduce((n, o) => n + o.exists, 0);
@@ -152,6 +170,26 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
 
 type AddOutcome = { problems: number; exists: number };
 
+/** Where one mod goes */
+type Placed = { folderId: number; folderName?: string };
+
+/** The active profile's folders: id → name as the folder lists show it ("Core / Sub") */
+async function folderLabels(): Promise<Map<number, string>> {
+    try {
+        const choices = await new DialogProfileService().getActiveProfileFolderChoices();
+        return new Map(choices.map(f => [f.id, f.label]));
+    } catch (error) {
+        console.warn('[AddModDialog] Could not read the folders', error);
+        return new Map();
+    }
+}
+
+function addedText(name: string, placed: Placed): string {
+    return placed.folderName
+        ? t("addMod.log.addedTo", {name, folder: placed.folderName})
+        : t("addMod.log.added", {name});
+}
+
 type NexusModsParsedUrl = NonNullable<ReturnType<typeof NexusModsApi.parseModLinks>>;
 
 function errorText(error: unknown): string {
@@ -173,14 +211,15 @@ function fileNameOf(p: string): string {
  * Add local files one by one, logging each outcome.
  * @returns how many could not be added / were already listed
  */
-async function addLocalMods(vm: HomeViewModel, list: string[], groupId: number): Promise<AddOutcome> {
+async function addLocalMods(vm: HomeViewModel, list: string[], placeOf: (item: string) => Placed): Promise<AddOutcome> {
     let problems = 0;
     let exists = 0;
     for (const item of list) {
         try {
-            const r = await vm.addModFromPath(item, groupId);
+            const placed = placeOf(item);
+            const r = await vm.addModFromPath(item, placed.folderId);
             if (r.status === "added") {
-                await logActivity('success', t("addMod.log.added", {name: fileNameOf(item)}), item, 'add-mod');
+                await logActivity('success', addedText(fileNameOf(item), placed), item, 'add-mod');
             } else if (r.status === "exists") {
                 exists++;
                 await logActivity('info', t("addMod.log.alreadyInList", {name: fileNameOf(item)}), item, 'add-mod');
@@ -197,10 +236,10 @@ async function addLocalMods(vm: HomeViewModel, list: string[], groupId: number):
     return {problems, exists};
 }
 
-async function logLinkResult(url: string, r: AddModFromUrlResult | undefined): Promise<'added' | 'exists' | 'problem'> {
+async function logLinkResult(url: string, r: AddModFromUrlResult | undefined, placed: Placed): Promise<'added' | 'exists' | 'problem'> {
     const name = r?.modName || r?.mod?.displayName;
     if (r?.status === "added") {
-        await logActivity('success', t("addMod.log.added", {name: name || url}), url, 'add-mod');
+        await logActivity('success', addedText(name || url, placed), url, 'add-mod');
         return 'added';
     }
     if (r?.status === "exists") {
@@ -225,7 +264,7 @@ async function logLinkResult(url: string, r: AddModFromUrlResult | undefined): P
  * Add links, logging each outcome (added mod's name, already listed, not found, error).
  * @returns how many could not be added / were already listed
  */
-async function addOnlineMods(vm: HomeViewModel, list: string[], groupId: number): Promise<AddOutcome> {
+async function addOnlineMods(vm: HomeViewModel, list: string[], placeOf: (item: string) => Placed): Promise<AddOutcome> {
     const directAddList: string[] = [];
     const nexusWebviewList: Array<{ url: string; parsed: NexusModsParsedUrl }> = [];
 
@@ -251,8 +290,9 @@ async function addOnlineMods(vm: HomeViewModel, list: string[], groupId: number)
             directAddList,
             async (item) => {
                 try {
-                    const r = await vm.addModFromUrl(item, groupId);
-                    count(await logLinkResult(item, r));
+                    const placed = placeOf(item);
+                    const r = await vm.addModFromUrl(item, placed.folderId);
+                    count(await logLinkResult(item, r, placed));
                     return r;
                 } catch (error) {
                     problems++;
@@ -268,8 +308,10 @@ async function addOnlineMods(vm: HomeViewModel, list: string[], groupId: number)
     for (const item of nexusWebviewList) {
         try {
             const addModUrl = await captureNexusDownloadUrl(item.url, { parsed: item.parsed });
-            const r = await vm.addModFromUrl(addModUrl, groupId);
-            count(await logLinkResult(item.url, r));
+            // the folder picked for the link the user gave, not the download link found for it
+            const placed = placeOf(item.url);
+            const r = await vm.addModFromUrl(addModUrl, placed.folderId);
+            count(await logLinkResult(item.url, r, placed));
             results.push(r);
         } catch (error) {
             problems++;

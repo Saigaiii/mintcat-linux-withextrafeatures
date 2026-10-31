@@ -10,6 +10,8 @@ import {CloseOutlined, FilePptOutlined, FileZipOutlined, FolderOutlined, FolderO
 import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
 import {isModArchivePath, parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
 import {logActivity} from "@/services/ActivityLog";
+import {itemKey, type ItemFolders} from "@/dialogs/AddModDialog/ItemFolders";
+import {ItemFolderSelect} from "@/dialogs/AddModDialog/ItemFolderSelect";
 
 
 interface FileItem {
@@ -55,10 +57,21 @@ async function makeFileItem(filePath: string): Promise<FileItem> {
     };
 }
 
-export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
+export const LocalTab = React.forwardRef(({paths, revision, folders}: {
+    paths?: string[];
+    revision?: number;
+    folders?: ItemFolders;
+}, ref) => {
 
     const [fileList, setFileList] = useState<FileItem[]>([]);
     const [pasteText, setPasteText] = useState<string>("");
+
+    // tell the dialog which mods are listed (for "N mod(s) go to another folder")
+    const report = folders?.report;
+    const listedKeys = fileList.map(f => itemKey.local(f.path));
+    useEffect(() => {
+        report?.("local", listedKeys);
+    }, [listedKeys.join("\n"), report]);
 
     React.useImperativeHandle(ref, () => ({
         submit: () => {
@@ -287,17 +300,22 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
                           renderItem={item => (
                               <List.Item className={"app-drag-list-item"}>
                                   <Flex justify={"space-between"}
+                                        align={"center"}
                                         gap={"small"}
                                         style={{width: "100%"}}
                                   >
-                                      <Flex gap={"small"}>
+                                      <Flex gap={"small"} style={{minWidth: 0, flex: 1}}>
                                           {
                                               item.type === "folder" ? (
                                                   item.isUnpackedMod ? <FolderOpenOutlined style={{color: '#52c41a'}}/> : <FolderOutlined/>
                                               ) :
                                               item.type === ".pak" ? <FilePptOutlined/> : <FileZipOutlined/>
                                           }
-                                          <span style={item.missing ? {color: '#ff4d4f'} : undefined}>
+                                          <span title={item.missing ? undefined : item.path}
+                                                style={{
+                                                    minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                                                    ...(item.missing ? {color: '#ff4d4f'} : {}),
+                                                }}>
                                               {item.name}
                                               {item.isUnpackedMod && <span style={{color: '#52c41a', marginLeft: 8, fontSize: 12}}>(Unpacked)</span>}
                                               {item.missing &&
@@ -307,6 +325,7 @@ export const LocalTab = React.forwardRef(({paths, revision}: any, ref) => {
                                                   </Tooltip>}
                                           </span>
                                       </Flex>
+                                      <ItemFolderSelect folders={folders} itemKey={itemKey.local(item.path)}/>
                                       <Button variant={"text"}
                                               size={"small"}
                                               color={"red"}

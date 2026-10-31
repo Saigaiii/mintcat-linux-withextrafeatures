@@ -7,6 +7,8 @@ import {ModioApi} from "@/apis/modio";
 import {ModcatApi} from "@/apis/modcat";
 import {NexusModsApi} from "@/apis/nexusmods";
 import {splitLines} from "@/utils/LocalModPaths";
+import {itemKey, type ItemFolders} from "@/dialogs/AddModDialog/ItemFolders";
+import {ItemFolderSelect} from "@/dialogs/AddModDialog/ItemFolderSelect";
 
 type LinkStatus =
     | { state: 'checking' }
@@ -35,7 +37,7 @@ async function checkLink(link: string): Promise<LinkStatus> {
     return {state: 'invalid'};
 }
 
-function StatusRow({link, status}: { link: string; status: LinkStatus }) {
+function StatusRow({link, status, folders}: { link: string; status: LinkStatus; folders?: ItemFolders }) {
     let icon: React.ReactNode;
     let label: React.ReactNode;
     switch (status.state) {
@@ -71,7 +73,7 @@ function StatusRow({link, status}: { link: string; status: LinkStatus }) {
     return (
         <Flex gap={6} align="baseline" style={{fontSize: 12, lineHeight: 1.5}}>
             <span style={{flexShrink: 0, width: 14}}>{icon}</span>
-            <Flex vertical style={{minWidth: 0}}>
+            <Flex vertical style={{minWidth: 0, flex: 1}}>
                 {label}
                 <Typography.Text type="secondary"
                                  style={{fontSize: 11, fontFamily: "monospace", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}
@@ -79,11 +81,20 @@ function StatusRow({link, status}: { link: string; status: LinkStatus }) {
                     {link}
                 </Typography.Text>
             </Flex>
+            {/* nothing to place for a link that can't be added */}
+            {status.state !== 'invalid' && status.state !== 'notFound' &&
+                <span style={{alignSelf: "center"}}>
+                    <ItemFolderSelect folders={folders} itemKey={itemKey.link(link)}/>
+                </span>}
         </Flex>
     );
 }
 
-export const OnlineTab = React.forwardRef(({text, revision}: any, ref) => {
+export const OnlineTab = React.forwardRef(({text, revision, folders}: {
+    text?: string;
+    revision?: number;
+    folders?: ItemFolders;
+}, ref) => {
 
     const [url, setUrl] = useState<string>(text ?? "");
     const [statuses, setStatuses] = useState<Record<string, LinkStatus>>({});
@@ -96,6 +107,12 @@ export const OnlineTab = React.forwardRef(({text, revision}: any, ref) => {
     }, [text, revision]);
 
     const links = [...new Set(splitLines(url))];
+
+    // tell the dialog which mods are listed (for "N mod(s) go to another folder")
+    const report = folders?.report;
+    useEffect(() => {
+        report?.("link", links.map(itemKey.link));
+    }, [links.join("\n"), report]);
 
     // Check each link shortly after typing stops
     useEffect(() => {
@@ -176,13 +193,13 @@ export const OnlineTab = React.forwardRef(({text, revision}: any, ref) => {
                               rows={5}
                     />
                     {links.length > 0 &&
-                        <Flex vertical gap={4} style={{maxHeight: 150, overflowY: "auto", paddingRight: 4}}>
+                        <Flex vertical gap={4} style={{maxHeight: 190, overflowY: "auto", paddingRight: 4}}>
                             {problems > 0 &&
                                 <Typography.Text type="danger" style={{fontSize: 12}}>
                                     {t("linkCheck.problems", {count: problems})}
                                 </Typography.Text>}
                             {links.map(link => (
-                                <StatusRow key={link} link={link} status={statuses[link] ?? {state: 'checking'}}/>
+                                <StatusRow key={link} link={link} status={statuses[link] ?? {state: 'checking'}} folders={folders}/>
                             ))}
                         </Flex>}
                 </Flex>
