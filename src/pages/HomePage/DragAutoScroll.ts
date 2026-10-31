@@ -6,16 +6,26 @@
  */
 export class DragAutoScroll {
     /** Distance from the edge (px) where scrolling starts */
-    private static readonly ZONE = 56;
+    private static readonly ZONE = 72;
     /** Speeds are in px per 1/60 s, so a faster screen doesn't scroll faster */
-    private static readonly MAX_SPEED = 22;
-    private static readonly MAX_SPEED_OUTSIDE = 36;
+    private static readonly MIN_SPEED = 2;
+    private static readonly MAX_SPEED = 30;
+    private static readonly MAX_SPEED_OUTSIDE = 70;
+    /** Holding at an edge speeds it up: after this long (ms)... */
+    private static readonly ACCEL_AFTER = 500;
+    /** ...up to this many times as fast, reached this much later (ms) */
+    private static readonly ACCEL_MAX = 2.5;
+    private static readonly ACCEL_RAMP = 2000;
+    /** Never faster than this (px per 1/60 s) */
+    private static readonly TOP_SPEED = 120;
     private static readonly FRAME_MS = 1000 / 60;
 
     private active = false;
     private speed = 0;
     private frame = 0;
     private lastTime = 0;
+    /** When scrolling in the current direction began (0: not scrolling) */
+    private heldSince = 0;
     /** Where the list is being scrolled to (fractional; the list itself keeps whole pixels) */
     private pos: number | null = null;
     private x = 0;
@@ -23,9 +33,8 @@ export class DragAutoScroll {
     private lastTarget: Element | null = null;
     /** The last dragenter WebKit sent: a dragleave right after it at the same spot is part of it */
     private lastEnter: { x: number; y: number; time: number } | null = null;
-    /** The dragged row's element, and when the drag started */
+    /** The dragged row's element */
     private source: EventTarget | null = null;
-    private startedAt = 0;
 
     /**
      * @param holder the list's scrolling element
@@ -40,7 +49,7 @@ export class DragAutoScroll {
     start(source?: EventTarget | null) {
         if (this.active) return;
         this.active = true;
-        this.startedAt = performance.now();
+        this.heldSince = 0;
         // Once the dragged row has scrolled out of the list it is removed from the page, and its
         // dragend no longer reaches the document; it still reaches the element itself
         this.source = source ?? null;
@@ -55,12 +64,8 @@ export class DragAutoScroll {
         document.addEventListener("dragleave", this.onDragLeave, true);
         document.addEventListener("drop", this.stop, true);
         document.addEventListener("dragend", this.stop, true);
-        // No mouse or key events reach the page during a drag (WebKitGTK sends one mousemove
-        // right after dragstart, which doesn't count), so one arriving means the drag is over
-        // even if no dragend was seen
-        document.addEventListener("mousemove", this.onMouseMove, true);
-        document.addEventListener("mousedown", this.stop, true);
-        document.addEventListener("keydown", this.onKeyDown, true);
+        // Mouse events don't say whether the drag is over: on KDE Plasma (Wayland) the page gets
+        // mouseout/mousemove with no button pressed while dragging and before the drop
     }
 
     stop = (e?: Event) => {
@@ -75,14 +80,9 @@ export class DragAutoScroll {
         document.removeEventListener("dragleave", this.onDragLeave, true);
         document.removeEventListener("drop", this.stop, true);
         document.removeEventListener("dragend", this.stop, true);
-        document.removeEventListener("mousemove", this.onMouseMove, true);
-        document.removeEventListener("mousedown", this.stop, true);
-        document.removeEventListener("keydown", this.onKeyDown, true);
-        // A click or the mouse moving with the button up is certain; a key or a move with the
-        // button still down only ends the scrolling
-        const missedDragEnd = !!e && (e.type === "dragend"
-            ? e.currentTarget === source && !(source as Node | null)?.isConnected
-            : e.type === "mousedown" || (e.type === "mousemove" && ((e as MouseEvent).buttons & 1) === 0));
+        // The dragend reached only the removed row: the tree didn't see it either
+        const missedDragEnd = !!e && e.type === "dragend" && e.currentTarget === source
+            && !(source as Node | null)?.isConnected;
         if (missedDragEnd) {
             // The tree didn't see the drag end either and would keep the row marked as dragged;
             // it listens for this on the window
@@ -93,6 +93,7 @@ export class DragAutoScroll {
     /** Stop scrolling until the next dragover near an edge */
     private halt() {
         this.speed = 0;
+        this.heldSince = 0;
         if (this.frame) cancelAnimationFrame(this.frame);
         this.frame = 0;
     }
@@ -102,13 +103,21 @@ export class DragAutoScroll {
         if (x < rect.left - 80 || x > rect.right + 80) return 0;
         const zone = Math.min(DragAutoScroll.ZONE, rect.height / 4);
         if (zone <= 0) return 0;
+        const {MIN_SPEED, MAX_SPEED, MAX_SPEED_OUTSIDE} = DragAutoScroll;
         const ramp = (depth: number) => depth > zone
             // past the edge: faster the further out, up to the outside maximum
-            ? Math.min(DragAutoScroll.MAX_SPEED_OUTSIDE, DragAutoScroll.MAX_SPEED + (depth - zone) / 4)
-            : Math.max(1, Math.round(DragAutoScroll.MAX_SPEED * depth / zone));
+            ? Math.min(MAX_SPEED_OUTSIDE, MAX_SPEED + (depth - zone) / 2)
+            : Math.max(MIN_SPEED, Math.round(MAX_SPEED * depth / zone));
         if (y < rect.top + zone) return -ramp(rect.top + zone - y);
         if (y > rect.bottom - zone) return ramp(y - (rect.bottom - zone));
         return 0;
+    }
+
+    /** How much faster after holding at an edge for `heldMs` */
+    static acceleration(heldMs: number): number {
+        const {ACCEL_AFTER, ACCEL_MAX, ACCEL_RAMP} = DragAutoScroll;
+        if (heldMs <= ACCEL_AFTER) return 1;
+        return 1 + (ACCEL_MAX - 1) * Math.min(1, (heldMs - ACCEL_AFTER) / ACCEL_RAMP);
     }
 
     /**
@@ -119,14 +128,6 @@ export class DragAutoScroll {
         const frames = Math.min(Math.max(elapsed, 0), 3 * DragAutoScroll.FRAME_MS) / DragAutoScroll.FRAME_MS;
         return Math.min(Math.max(pos + speed * frames, 0), Math.max(max, 0));
     }
-
-    private onMouseMove = (e: MouseEvent) => {
-        if ((e.buttons & 1) === 0 || performance.now() - this.startedAt > 200) this.stop(e);
-    };
-
-    private onKeyDown = (e: KeyboardEvent) => {
-        if (!["Shift", "Control", "Alt", "Meta", "AltGraph"].includes(e.key)) this.stop(e);
-    };
 
     private onDragOver = (e: DragEvent) => {
         // The list's own edge scrolling (rc-virtual-list) leaves alone events a nested list has
@@ -140,7 +141,10 @@ export class DragAutoScroll {
         if (!holder) return;
         this.x = e.clientX;
         this.y = e.clientY;
-        this.speed = DragAutoScroll.speedFor(holder.getBoundingClientRect(), e.clientX, e.clientY);
+        const speed = DragAutoScroll.speedFor(holder.getBoundingClientRect(), e.clientX, e.clientY);
+        // turning around starts the speed-up again
+        if (Math.sign(speed) !== Math.sign(this.speed)) this.heldSince = 0;
+        this.speed = speed;
         if (this.speed === 0) {
             this.halt();
         } else if (!this.frame) {
@@ -184,13 +188,17 @@ export class DragAutoScroll {
         this.lastTime = now;
         const actual = holder.scrollTop;
         // start from where the list is, also when something else scrolled it meanwhile
-        if (this.pos === null || Math.abs(actual - this.pos) > 2 * Math.abs(this.speed) + 32) this.pos = actual;
+        if (this.pos === null || Math.abs(actual - this.pos) > 3 * DragAutoScroll.ACCEL_MAX * Math.abs(this.speed) + 32) this.pos = actual;
         const max = holder.scrollHeight - holder.clientHeight;
-        const next = DragAutoScroll.nextPosition(this.pos, this.speed, elapsed, max);
+        if (!this.heldSince) this.heldSince = now;
+        const speed = Math.sign(this.speed) * Math.min(DragAutoScroll.TOP_SPEED,
+            Math.abs(this.speed) * DragAutoScroll.acceleration(now - this.heldSince));
+        const next = DragAutoScroll.nextPosition(this.pos, speed, elapsed, max);
         if (Math.round(next) === Math.round(this.pos) && (next <= 0 || next >= max)) {
             // at the top or bottom: tell the tree about the last rows, then wait for the next
             // dragover to start again
             this.pos = next;
+            this.heldSince = 0;
             this.pokeTree();
             return;
         }
