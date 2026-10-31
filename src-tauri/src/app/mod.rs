@@ -141,6 +141,7 @@ pub fn run() {
             backup::rclone_run,
             backup::rclone_cancel,
             backup::file_set_mtime,
+            backup::file_set_readonly,
             system_icon::system_icon_status,
             system_icon::system_icon_apply,
             system_icon::system_icon_restore,

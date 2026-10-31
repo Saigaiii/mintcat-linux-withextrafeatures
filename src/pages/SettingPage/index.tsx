@@ -4,6 +4,7 @@ import {MintCatSettings} from "@/pages/SettingPage/MintCatSettings.tsx";
 import {NetworkSettings} from "@/pages/SettingPage/NetworkSettings.tsx";
 import {CloudBackupSettings} from "@/pages/SettingPage/CloudBackupSettings.tsx";
 import {BackupSettings} from "@/pages/SettingPage/BackupSettings.tsx";
+import {GameConfigCard} from "@/pages/SettingPage/GameConfigSettings.tsx";
 import {AdvancedSettingsCard, useAdvancedShown, useMintcatSupporter} from "@/pages/SettingPage/AdvancedSettingsCard.tsx";
 
 /** Network settings only show with "Show advanced settings" */
@@ -43,6 +44,7 @@ export class SettingPage extends BasePage<any, any> {
                 style={{ height: window.innerHeight - 81 - this.logPanelOffset }}>
                 <MintCatSettings/>
                 <BackupSettings/>
+                <GameConfigCard/>
                 <MintcatCloudBackup/>
                 <AdvancedOnly>
                     <NetworkSettings/>

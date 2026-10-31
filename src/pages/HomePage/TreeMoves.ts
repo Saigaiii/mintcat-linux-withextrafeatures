@@ -66,3 +66,84 @@ export function moveToPosition(treeData: any[], order: number[], sourceKey: stri
     }
     return anchor.folders;
 }
+
+/**
+ * Move several mods (keys in any order) together: in their install order, the first becomes
+ * number `position` and the others follow it, all in the folder of the place they go to
+ * (right before the mod now at that number when moving up, right after the one before it when
+ * moving down). One mod is the same as `moveToPosition`. Changes `treeData` in place. Returns
+ * the folder keys above the new place, or null when nothing moved.
+ */
+export function moveGroupToPosition(treeData: any[], order: number[], keys: string[], position: number): string[] | null {
+    if (!Number.isFinite(position)) return null;
+    const wanted = new Set(keys.map(String));
+    const leaves = leavesInOrder(treeData);
+    const rank = (modId: number) => {
+        const i = order.indexOf(modId);
+        return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+    };
+    const group = leaves.filter(l => wanted.has(String(l.node.key)))
+        .sort((a, b) => rank(a.node.modId) - rank(b.node.modId));
+    if (group.length === 0) return null;
+    if (group.length === 1) return moveToPosition(treeData, order, String(group[0].node.key), position);
+
+    const groupIds = new Set(group.map(g => g.node.modId));
+    const rest = order.filter(id => !groupIds.has(id));
+    const target = Math.min(Math.max(Math.round(position), 1), rest.length + 1) - 1;
+    const from = rank(group[0].node.modId);
+    // already together at that place: nothing to do
+    const together = group.every((g, i) => rank(g.node.modId) === from + i);
+    if (together && from === target) return null;
+
+    const byId = new Map(leaves.map(l => [l.node.modId, l]));
+    const before = target < rest.length ? byId.get(rest[target]) : undefined;
+    const after = target > 0 ? byId.get(rest[target - 1]) : undefined;
+    // moving up: in the folder of the mod now at that number; moving down (or past the end):
+    // in the folder of the one before it
+    const goBefore = before && (from > target || !after);
+    const anchor = goBefore ? before : after;
+    if (!anchor) return null;
+
+    const removed: { node: any; was: { list: any[]; index: number } }[] = [];
+    for (const g of group) {
+        const was = detach(treeData, g.node);
+        if (was) removed.push({node: g.node, was});
+    }
+    let ok = placeNextTo(treeData, anchor.node, group[0].node, !goBefore);
+    for (let i = 1; ok && i < group.length; i++) ok = placeNextTo(treeData, group[i - 1].node, group[i].node, true);
+    if (!ok) {
+        // put everything back where it was rather than lose mods
+        for (const g of group) detach(treeData, g.node);
+        for (let i = removed.length - 1; i >= 0; i--) removed[i].was.list.splice(removed[i].was.index, 0, removed[i].node);
+        return null;
+    }
+    return anchor.folders;
+}
+
+/**
+ * After `centerKey` was dropped somewhere, bring the other mods of `keysInOrder` (the dragged
+ * group, in install order) next to it: those that came before it right before it, the rest
+ * right after it, so the group keeps its order in the dragged mod's new folder. Changes
+ * `treeData` in place; false when the dragged mod isn't in it.
+ */
+export function gatherAround(treeData: any[], keysInOrder: string[], centerKey: string): boolean {
+    const byKey = new Map(leavesInOrder(treeData).map(l => [String(l.node.key), l.node]));
+    const center = byKey.get(centerKey);
+    const at = keysInOrder.indexOf(centerKey);
+    if (!center || at < 0) return false;
+    const nodes = (list: string[]) => list.map(k => byKey.get(k)).filter(n => n && n !== center);
+    const above = nodes(keysInOrder.slice(0, at));
+    const below = nodes(keysInOrder.slice(at + 1));
+    for (const n of [...above, ...below]) detach(treeData, n);
+    let prev = center;
+    for (let i = above.length - 1; i >= 0; i--) {
+        placeNextTo(treeData, prev, above[i], false);
+        prev = above[i];
+    }
+    prev = center;
+    for (const n of below) {
+        placeNextTo(treeData, prev, n, true);
+        prev = n;
+    }
+    return true;
+}

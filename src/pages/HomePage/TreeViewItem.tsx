@@ -18,6 +18,8 @@ import {
     PlusCircleOutlined,
     SyncOutlined,
     VerticalAlignTopOutlined,
+    VerticalAlignMiddleOutlined,
+    ColumnHeightOutlined,
     WarningOutlined,
 } from "@ant-design/icons";
 import {open} from "@tauri-apps/plugin-shell";
@@ -232,6 +234,10 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
             icon: <DragOutlined />,
             children: moveToChildren,
         }] : []),
+        {type: 'divider'},
+        {label: t('folders.expandAll'), key: 'expand_all_folders', icon: <ColumnHeightOutlined />},
+        {label: t('folders.collapseAll'), key: 'collapse_all_folders', icon: <VerticalAlignMiddleOutlined />},
+        {type: 'divider'},
         {label: t('Delete Group'), key: 'delete_group', icon: <DeleteOutlined />}
     ];
     
@@ -1171,12 +1177,18 @@ function ModTreeViewTitle({nodeData}) {
  * The install position number in front of a mod. Clicking it asks for another position and moves
  * the mod there (see TreeView.onMoveToPosition).
  */
-function PositionBadge({nodeKey, position, enabled, onMove}: {
+function PositionBadge({nodeKey, position, enabled, onMove, groupSize = 0, groupFirst}: {
     nodeKey: string;
     position: number;
     enabled: boolean;
     onMove?: (sourceKey: string, position: number) => void | Promise<void>;
+    /** How many picked mods move together with this one (0: only this one) */
+    groupSize?: number;
+    /** Number of the first of them */
+    groupFirst?: number;
 }) {
+    const inGroup = groupSize > 1;
+    const startAt = inGroup ? (groupFirst ?? position) : position;
     const {token} = useToken();
     const total = useInstallOrder().length;
     const [open, setOpen] = useState(false);
@@ -1186,14 +1198,15 @@ function PositionBadge({nodeKey, position, enabled, onMove}: {
 
     React.useEffect(() => {
         if (open) {
-            setValue(position);
+            setValue(startAt);
             // select the number so typing replaces it
             setTimeout(() => inputRef.current?.select?.(), 30);
         }
-    }, [open, position]);
+    }, [open, startAt]);
 
     const target = value == null ? null : Math.min(Math.max(Math.round(value), 1), Math.max(total, 1));
-    const canMove = !!onMove && target != null && target !== position && !moving;
+    // a group may also be pulled together at its own number
+    const canMove = !!onMove && target != null && (inGroup || target !== position) && !moving;
 
     const move = async () => {
         if (!canMove || target == null) return;
@@ -1254,7 +1267,7 @@ function PositionBadge({nodeKey, position, enabled, onMove}: {
                  trigger="click"
                  placement="bottomLeft"
                  destroyOnHidden
-                 title={t("list.moveToPositionTitle")}
+                 title={inGroup ? t("list.moveGroupTitle", {count: groupSize}) : t("list.moveToPositionTitle")}
                  content={
                      <div onClick={stop} onMouseDown={stop} onKeyDown={(e) => {
                          e.stopPropagation();
@@ -1276,7 +1289,9 @@ function PositionBadge({nodeKey, position, enabled, onMove}: {
                              </Button>
                          </Flex>
                          <div style={{fontSize: 12, opacity: 0.65, marginTop: 6, maxWidth: 260}}>
-                             {t("list.moveToPositionHint", {position, total})}
+                             {inGroup
+                                 ? t("list.moveGroupHint", {first: startAt, total})
+                                 : t("list.moveToPositionHint", {position, total})}
                          </div>
                      </div>
                  }>
@@ -1296,6 +1311,10 @@ export interface TreeViewItemProps {
     /** Move a mod to another install position (1 = top); only when its position is known */
     onMoveToPosition?: (sourceKey: string, position: number) => void | Promise<void>;
     itemOrder?: number;
+    /** Picked mods that move with this one (0 when it isn't one of several picked) */
+    groupSize?: number;
+    /** Install number of the first picked mod */
+    groupFirst?: number;
     /** Click on a mod row (Ctrl/Shift-clicks select mods) */
     onRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
 }
@@ -1316,6 +1335,8 @@ function TreeViewItemInner({
     onMoveToFolder,
     onMoveToPosition,
     itemOrder,
+    groupSize,
+    groupFirst,
     onRowClick,
 }: TreeViewItemProps) {
     const {token} = useToken();
@@ -1409,7 +1430,9 @@ function TreeViewItemInner({
                 <PositionBadge nodeKey={String(nodeData.key)}
                                position={itemOrder ?? 1}
                                enabled={enabled}
-                               onMove={onMoveToPosition}/>
+                               onMove={onMoveToPosition}
+                               groupSize={groupSize}
+                               groupFirst={groupFirst}/>
 
                     <ModTreeViewSwitch nodeData={nodeData} onCountLabelUpdate={onCountLabelUpdate}/>
 

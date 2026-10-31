@@ -13,7 +13,7 @@ import {
     DeleteOutlined,
     EditOutlined, FieldTimeOutlined, LoadingOutlined, MinusSquareOutlined, PauseCircleOutlined, PlayCircleOutlined,
     PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined, ImportOutlined,
-    UnorderedListOutlined, WarningOutlined, FolderOutlined
+    UnorderedListOutlined, WarningOutlined, FolderOutlined, ColumnHeightOutlined, VerticalAlignMiddleOutlined
 } from "@ant-design/icons";
 import * as checkbox from "antd/es/checkbox";
 
@@ -792,28 +792,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // Global install positions (folders included) for the row badges and conflict winners
         InstallOrder.set(flattenTreeModIds(activeRoot));
 
-        let newExpandedKeys: any[];
-        
-        if (resetExpandedKeys) {
-            // 切换 profile 时：使用新 profile 的默认展开状态（全部展开）
-            newExpandedKeys = converter.expandedKeys;
-        } else {
-            // 普通刷新：尝试保留当前展开状态
-            const expandedFolderNames = this.getExpandedFolderNames();
-            
-            if (expandedFolderNames.length > 0) {
-                // Reconstruct expandedKeys from folder names (handles ID changes)
-                const reconstructedKeys = this.reconstructExpandedKeys(expandedFolderNames, converter.treeData as DataNode[]);
-                // If reconstruction found matching folders, use them; otherwise fallback to default expanded keys
-                newExpandedKeys = reconstructedKeys.length > 0 ? reconstructedKeys : converter.expandedKeys;
-            } else if (this.state.expandedKeys.length === 0) {
-                // First load: use default expanded keys from converter
-                newExpandedKeys = converter.expandedKeys;
-            } else {
-                // Keep existing expandedKeys (shouldn't normally reach here)
-                newExpandedKeys = this.state.expandedKeys;
-            }
-        }
+        const newExpandedKeys = this.nextExpandedKeys(converter.treeData as DataNode[], converter.expandedKeys ?? [], resetExpandedKeys);
 
         this.setState({
             treeData: converter.treeData,
@@ -1041,6 +1020,85 @@ export class HomePage extends BasePage<any, ModListPageState> {
         this.setState({ checkedKeys: keys });
     }
 
+    /** Names of the folders that were open before a search opened the ones with matches */
+    private expandedBeforeSearch: string[] | null = null;
+
+    /**
+     * Which folders are open after the list is rebuilt. Folders are matched by name, as saving
+     * the list gives them new ids. A search opens every folder with a matching mod (else the
+     * matches could be hidden in closed folders) and clearing it puts the earlier ones back.
+     */
+    private nextExpandedKeys(treeData: DataNode[], defaults: any[], reset: boolean): any[] {
+        if (reset) {
+            // another profile or game: all open
+            this.expandedBeforeSearch = null;
+            return defaults;
+        }
+        const searching = (TreeViewConverter.filterList ?? []).some(f => f && f !== "All");
+        if (searching) {
+            if (this.expandedBeforeSearch === null) this.expandedBeforeSearch = this.getExpandedFolderNames();
+            const keys = new Set(this.reconstructExpandedKeys(this.getExpandedFolderNames(), treeData));
+            const withMods = (nodes: DataNode[] | undefined): boolean => {
+                let any = false;
+                for (const node of nodes ?? []) {
+                    if (node.isLeaf) {
+                        any = true;
+                    } else if (withMods(node.children as DataNode[] | undefined)) {
+                        keys.add(String(node.key));
+                        any = true;
+                    }
+                }
+                return any;
+            };
+            withMods(treeData);
+            return [...keys];
+        }
+        if (this.expandedBeforeSearch !== null) {
+            const names = this.expandedBeforeSearch;
+            this.expandedBeforeSearch = null;
+            return this.reconstructExpandedKeys(names, treeData);
+        }
+        const expandedFolderNames = this.getExpandedFolderNames();
+        if (expandedFolderNames.length > 0) {
+            const reconstructedKeys = this.reconstructExpandedKeys(expandedFolderNames, treeData);
+            // none of them is left (deleted or renamed elsewhere): all open
+            return reconstructedKeys.length > 0 ? reconstructedKeys : defaults;
+        }
+        if (!this.state.treeData?.length) {
+            // first load: all open
+            return defaults;
+        }
+        // every folder was closed (e.g. "Collapse all folders"): keep them closed
+        return [];
+    }
+
+    /** Keys of every folder in the list, subfolders included */
+    private getAllFolderKeys(): string[] {
+        const keys: string[] = [];
+        const walk = (nodes: DataNode[] | undefined) => {
+            for (const node of nodes ?? []) {
+                if (!node.isLeaf && String(node.key).startsWith("folder-")) {
+                    keys.push(String(node.key));
+                    walk(node.children as DataNode[] | undefined);
+                }
+            }
+        };
+        walk(this.state.treeData as DataNode[] | undefined);
+        return keys;
+    }
+
+    /** Whether every folder is open (false when there are no folders) */
+    private allFoldersExpanded(): boolean {
+        const folders = this.getAllFolderKeys();
+        const open = new Set((this.state.expandedKeys ?? []).map(String));
+        return folders.length > 0 && folders.every(k => open.has(k));
+    }
+
+    @autoBind
+    private setAllFoldersExpanded(expand: boolean) {
+        this.setState({expandedKeys: expand ? this.getAllFolderKeys() : []});
+    }
+
     @autoBind
     private onTreeNodeExpand(keys) {
         this.setState({
@@ -1121,28 +1179,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // Global install positions (folders included) for the row badges and conflict winners
         InstallOrder.set(flattenTreeModIds(activeRoot));
 
-        let newExpandedKeys: any[];
-        
-        if (resetExpandedKeys) {
-            // 切换 profile/游戏时：使用新 profile 的默认展开状态（全部展开）
-            newExpandedKeys = converter.expandedKeys;
-        } else {
-            // 普通刷新：尝试保留当前展开状态
-            const expandedFolderNames = this.getExpandedFolderNames();
-            
-            if (expandedFolderNames.length > 0) {
-                // Reconstruct expandedKeys from folder names (handles ID changes)
-                const reconstructedKeys = this.reconstructExpandedKeys(expandedFolderNames, converter.treeData as DataNode[]);
-                // If reconstruction found matching folders, use them; otherwise fallback to default expanded keys
-                newExpandedKeys = reconstructedKeys.length > 0 ? reconstructedKeys : converter.expandedKeys;
-            } else if (this.state.expandedKeys.length === 0) {
-                // First load: use default expanded keys from converter
-                newExpandedKeys = converter.expandedKeys;
-            } else {
-                // Keep existing expandedKeys (shouldn't normally reach here)
-                newExpandedKeys = this.state.expandedKeys;
-            }
-        }
+        const newExpandedKeys = this.nextExpandedKeys(converter.treeData as DataNode[], converter.expandedKeys ?? [], resetExpandedKeys);
 
         this.setState({
             treeData: converter.treeData,
@@ -1267,6 +1304,12 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const id = extractId(nodeKey);
 
         switch (key) {
+            case "expand_all_folders":
+                this.setAllFoldersExpanded(true);
+                break;
+            case "collapse_all_folders":
+                this.setAllFoldersExpanded(false);
+                break;
             case "add_new_group": {
                 this.inputDialogRef.current?.setCallback(
                     t("Add New Group"),
@@ -1703,6 +1746,19 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                         <Button icon={<SortAscendingOutlined/>} type={"text"} />
                                     </Tooltip>
                                 </Dropdown>
+                                {(() => {
+                                    const hasFolders = this.getAllFolderKeys().length > 0;
+                                    const allOpen = this.allFoldersExpanded();
+                                    return (
+                                        <Tooltip title={t(allOpen ? "folders.collapseAll" : "folders.expandAll")}>
+                                            <Button icon={allOpen ? <VerticalAlignMiddleOutlined/> : <ColumnHeightOutlined/>}
+                                                    type={"text"}
+                                                    disabled={!hasFolders}
+                                                    aria-label={t(allOpen ? "folders.collapseAll" : "folders.expandAll")}
+                                                    onClick={() => this.setAllFoldersExpanded(!allOpen)}/>
+                                        </Tooltip>
+                                    );
+                                })()}
                                 <Tooltip title={t(ListDisplayOptions.showLocalPaths() ? "list.hideLocalPaths" : "list.showLocalPaths")}>
                                     <Button icon={<FolderOpenOutlined/>}
                                             type={ListDisplayOptions.showLocalPaths() ? "default" : "text"}

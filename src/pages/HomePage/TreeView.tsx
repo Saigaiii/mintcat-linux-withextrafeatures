@@ -12,7 +12,8 @@ import {ProfileViewModel} from "@/dialogs/ProfileEditDialog/ProfileViewModel.ts"
 import {TreeViewItem} from "./TreeViewItem";
 import {dragAndDrop} from "./DragAndDropTree";
 import {DragAutoScroll} from "./DragAutoScroll";
-import {moveToPosition} from "./TreeMoves";
+import {gatherAround, leavesInOrder, moveGroupToPosition, moveToPosition} from "./TreeMoves";
+import {t} from "i18next";
 import { IoC } from "@/core/IoC";
 
 /** A folder's "Parent/Child" path in a tree, as folder colors are keyed (null when not a folder there) */
@@ -76,6 +77,55 @@ export class TreeView extends React.Component<TreeViewProps> {
 
     componentWillUnmount() {
         this.autoScroll.stop();
+    }
+
+    private pickedCache: { treeData: unknown; checked: unknown; multi: boolean; keys: string[]; modIds: Map<string, number> } | null = null;
+
+    /** Mods picked with Ctrl/Shift-click or checkboxes that the list shows, in list order */
+    private pickedMods(): { keys: string[]; modIds: Map<string, number> } {
+        const {treeData, checkedKeys, isMultiSelect} = this.props;
+        const c = this.pickedCache;
+        if (c && c.treeData === treeData && c.checked === checkedKeys && c.multi === !!isMultiSelect) return c;
+        const raw: any = checkedKeys;
+        const list: unknown[] = Array.isArray(raw) ? raw : (raw?.checked ?? []);
+        const keys: string[] = [];
+        const modIds = new Map<string, number>();
+        if (isMultiSelect && list.length > 1) {
+            const picked = new Set(list.map(String));
+            for (const leaf of leavesInOrder(treeData as any[])) {
+                const key = String(leaf.node.key);
+                if (picked.has(key)) {
+                    keys.push(key);
+                    modIds.set(key, leaf.node.modId);
+                }
+            }
+        }
+        this.pickedCache = {treeData, checked: checkedKeys, multi: !!isMultiSelect, keys, modIds};
+        return this.pickedCache;
+    }
+
+    /** The picked mods (in list order) when `key` is one of several, else null: they move together */
+    private groupOf(key: string): string[] | null {
+        const {keys} = this.pickedMods();
+        return keys.length > 1 && keys.includes(key) ? keys : null;
+    }
+
+    /** Dragging one of several picked mods: show how many go along */
+    private setGroupDragImage(info: any) {
+        const node = info?.node;
+        const group = node?.isLeaf ? this.groupOf(String(node.key)) : null;
+        const dataTransfer: DataTransfer | undefined = info?.event?.dataTransfer;
+        if (!group || !dataTransfer?.setDragImage) return;
+        const el = document.createElement("div");
+        el.textContent = t("list.dragGroup", {count: group.length});
+        el.style.cssText = "position:fixed;top:-1000px;left:0;padding:4px 12px;border-radius:6px;"
+            + "background:#d4800f;color:#000;font:600 13px sans-serif;white-space:nowrap;";
+        document.body.appendChild(el);
+        try {
+            dataTransfer.setDragImage(el, 14, 14);
+        } finally {
+            setTimeout(() => el.remove(), 0);
+        }
     }
 
     shouldComponentUpdate(nextProps: TreeViewProps) {
@@ -262,8 +312,13 @@ export class TreeView extends React.Component<TreeViewProps> {
         const treeData = (converter.convertToFromRoot(activeRoot) ?? []) as any[];
         TreeViewConverter.filterList = filterList;
 
-        const folders = moveToPosition(treeData, order, sourceKey, position);
+        // one of several picked mods: they all go, in their order
+        const group = this.groupOf(sourceKey);
+        const folders = group
+            ? moveGroupToPosition(treeData, order, group, position)
+            : moveToPosition(treeData, order, sourceKey, position);
         if (!folders) return;
+        const shownKey = group ? group[0] : sourceKey;
 
         try {
             const profileTreeItem = converter.convertFrom(treeData);
@@ -279,7 +334,7 @@ export class TreeView extends React.Component<TreeViewProps> {
             // Highlight it, unless mods are being picked with checkboxes: a plain select would
             // end that and drop the picked mods
             if (!this.props.isMultiSelect) this.props.onTreeNodeSelect?.([sourceKey]);
-            requestAnimationFrame(() => this.treeRef.current?.scrollTo?.({key: sourceKey, align: "auto"}));
+            requestAnimationFrame(() => this.treeRef.current?.scrollTo?.({key: shownKey, align: "auto"}));
         } catch (error) {
             console.error(`[TreeView] Error moving ${sourceKey} to position ${position}:`, error);
         }
@@ -321,7 +376,10 @@ export class TreeView extends React.Component<TreeViewProps> {
 
         const dragKey = String(info.dragNode?.key ?? "");
         const pathBefore = folderPathOf(treeData, dragKey);
+        // one of several picked mods was dragged: the others come along, keeping their order
+        const group = info.dragNode?.isLeaf ? this.groupOf(dragKey) : null;
         const dragTreeData = dragAndDrop(info, treeData);
+        if (group) gatherAround(dragTreeData, group, dragKey);
 
         try {
             const profileTreeItem = converter.convertFrom(dragTreeData);
@@ -380,6 +438,8 @@ export class TreeView extends React.Component<TreeViewProps> {
         const itemOrder = nodeData.isLeaf
             ? (InstallOrder.position(nodeData.modId) ?? this.getItemOrder(nodeData.key))
             : undefined;
+        const group = nodeData.isLeaf ? this.groupOf(String(nodeData.key)) : null;
+        const groupFirst = group ? InstallOrder.position(this.pickedMods().modIds.get(group[0]) ?? -1) : undefined;
         // 必须用 JSX 挂载子组件，不能 TreeViewItem(...) 函数调用，否则 Hooks 会在 antd Tree 内部 memo/effect 中执行，触发 “Do not call Hooks inside useEffect”
         return (
             <TreeViewItem
@@ -390,6 +450,8 @@ export class TreeView extends React.Component<TreeViewProps> {
                 onMoveToFolder={this.onMoveToFolder}
                 onMoveToPosition={InstallOrder.position(nodeData.modId) !== undefined ? this.onMoveToPosition : undefined}
                 itemOrder={itemOrder}
+                groupSize={group?.length ?? 0}
+                groupFirst={groupFirst}
                 onRowClick={this.props.onTreeRowClick}
             />
         );
@@ -432,7 +494,10 @@ export class TreeView extends React.Component<TreeViewProps> {
                 onRightClick={this.onTreeRightClick}
                 onExpand={this.onTreeNodeExpand}
                 onDrop={this.onDrop}
-                onDragStart={info => this.autoScroll.start(info.event.target)}
+                onDragStart={info => {
+                    this.autoScroll.start(info.event.target);
+                    this.setGroupDragImage(info);
+                }}
                 titleRender={this.onCustomTitleRender}
             />
             </div>

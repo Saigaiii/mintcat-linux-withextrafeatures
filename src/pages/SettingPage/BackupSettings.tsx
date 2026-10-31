@@ -80,19 +80,43 @@ function stamp(): string {
 // Copies MINTCAT kept of what it replaced (settings files before an import, the database before
 // a restore), with a button to delete them
 
-function KeptCopiesRow({kind, refreshKey}: { kind: "settings" | "database"; refreshKey?: number }) {
+const KEPT = {
+    settings: {
+        load: () => KeptCopies.settingsCopies(),
+        remove: () => KeptCopies.deleteSettingsCopies(),
+        label: "keptCopies.settingsLabel", help: "keptCopies.settingsHelp",
+        confirmTitle: "keptCopies.settingsConfirmTitle", confirm: "keptCopies.settingsConfirm",
+        summary: "keptCopies.settingsSummary", folder: true,
+    },
+    config: {
+        load: () => KeptCopies.configCopies(),
+        remove: () => KeptCopies.deleteConfigCopies(),
+        label: "keptCopies.configLabel", help: "keptCopies.configHelp",
+        confirmTitle: "keptCopies.configConfirmTitle", confirm: "keptCopies.configConfirm",
+        summary: "keptCopies.configSummary", folder: true,
+    },
+    database: {
+        load: () => KeptCopies.databaseCopy(),
+        remove: () => KeptCopies.deleteDatabaseCopy(),
+        label: "keptCopies.databaseLabel", help: "keptCopies.databaseHelp",
+        confirmTitle: "keptCopies.databaseConfirmTitle", confirm: "keptCopies.databaseConfirm",
+        summary: "", folder: false,
+    },
+} as const;
+
+export function KeptCopiesRow({kind, refreshKey}: { kind: keyof typeof KEPT; refreshKey?: number }) {
     const [info, setInfo] = React.useState<CopiesInfo | null>();
     const [deleting, setDeleting] = React.useState(false);
-    const settings = kind === "settings";
+    const k = KEPT[kind];
 
     const load = React.useCallback(async () => {
         try {
-            setInfo(settings ? await KeptCopies.settingsCopies() : await KeptCopies.databaseCopy());
+            setInfo(await KEPT[kind].load());
         } catch (e) {
             console.warn("[KeptCopies] could not read", e);
             setInfo(null);
         }
-    }, [settings]);
+    }, [kind]);
 
     React.useEffect(() => {
         void load();
@@ -104,15 +128,14 @@ function KeptCopiesRow({kind, refreshKey}: { kind: "settings" | "database"; refr
     const onDelete = async () => {
         if (!info || empty) return;
         const ok = await MessageBox.confirm({
-            title: t(settings ? "keptCopies.settingsConfirmTitle" : "keptCopies.databaseConfirmTitle"),
-            content: t(settings ? "keptCopies.settingsConfirm" : "keptCopies.databaseConfirm", {files: info.files, size}),
+            title: t(k.confirmTitle),
+            content: t(k.confirm, {files: info.files, size}),
             okText: t("keptCopies.delete"),
         });
         if (!ok) return;
         setDeleting(true);
         try {
-            if (settings) await KeptCopies.deleteSettingsCopies();
-            else await KeptCopies.deleteDatabaseCopy();
+            await k.remove();
             message.success(t("keptCopies.deleted", {size}));
         } catch (e) {
             message.error(`${t("keptCopies.deleteFailed")}: ${errorText(e)}`);
@@ -123,16 +146,15 @@ function KeptCopiesRow({kind, refreshKey}: { kind: "settings" | "database"; refr
     };
 
     return (
-        <Form.Item label={t(settings ? "keptCopies.settingsLabel" : "keptCopies.databaseLabel")}
-                   tooltip={t(settings ? "keptCopies.settingsHelp" : "keptCopies.databaseHelp")}>
+        <Form.Item label={t(k.label)} tooltip={t(k.help)}>
             <Flex align="center" gap={8} wrap>
                 <Typography.Text type={empty ? "secondary" : undefined}>
                     {info === undefined ? "…"
                         : empty ? t("keptCopies.none")
-                            : settings ? t("keptCopies.settingsSummary", {count: info!.count, files: info!.files, size})
+                            : k.summary ? t(k.summary, {count: info!.count, files: info!.files, size})
                                 : size}
                 </Typography.Text>
-                {settings && !empty && (
+                {k.folder && !empty && (
                     <Tooltip title={t("keptCopies.openFolder")}>
                         <Button size="small" icon={<FolderOpenOutlined/>}
                                 onClick={() => void openPath(info!.path).catch(e => message.error(errorText(e)))}/>

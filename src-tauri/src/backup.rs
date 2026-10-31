@@ -187,6 +187,22 @@ pub fn file_set_mtime(path: String, mtime_ms: u64) -> Result<(), String> {
     file.set_modified(time).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Make a file read-only (for everyone) or writable again (for its owner). The game can't
+/// write over a read-only config file; MINTCAT lifts it for a moment when it saves one.
+#[tauri::command]
+pub fn file_set_readonly(path: String, readonly: bool) -> Result<(), String> {
+    let mut perms = fs::metadata(&path).map_err(|e| format!("{path}: {e}"))?.permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = perms.mode();
+        perms.set_mode(if readonly { mode & !0o222 } else { mode | 0o200 });
+    }
+    #[cfg(not(unix))]
+    perms.set_readonly(readonly);
+    fs::set_permissions(&path, perms).map_err(|e| format!("{path}: {e}"))
+}
+
 static RUNNING: LazyLock<Mutex<HashMap<String, Arc<Mutex<Child>>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Clone, Serialize)]
@@ -407,6 +423,26 @@ mod tests {
         let ms = modified.duration_since(std::time::UNIX_EPOCH).unwrap().as_millis();
         assert_eq!(ms, 1_790_870_400_000);
         assert!(file_set_mtime(dir.join("missing").display().to_string(), 0).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn readonly_round_trip() {
+        let dir = temp_dir("readonly");
+        let f = dir.join("Engine.ini");
+        fs::write(&f, b"[Core.System]").unwrap();
+        let p = f.display().to_string();
+        file_set_readonly(p.clone(), true).unwrap();
+        assert!(fs::metadata(&f).unwrap().permissions().readonly());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o222, 0);
+        }
+        file_set_readonly(p.clone(), false).unwrap();
+        assert!(!fs::metadata(&f).unwrap().permissions().readonly());
+        fs::write(&f, b"changed").unwrap();
+        assert!(file_set_readonly(dir.join("missing.ini").display().to_string(), true).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -2,12 +2,14 @@
  * Copies MINTCAT keeps of things it replaced, so they can be looked at or deleted to free space:
  * - mod settings files an import replaced: <app data>/mod-settings-backups/<date>/...
  * - the database a restore replaced: mintcat.sqlite.bak (+ -wal/-shm) in the config folder.
+ * - earlier versions of game config files edited in MINTCAT: <app data>/config-backups/...
  * Only those exact places are ever deleted here.
  */
 import {join} from "@tauri-apps/api/path";
 import {exists, readDir, remove, stat} from "@tauri-apps/plugin-fs";
 import {replacedFilesFolder} from "@/services/ModSettingsFiles";
 import {getBackupPath} from "@/apis/mintcat/cloudBackup";
+import {GameConfigFiles} from "@/services/GameConfigFiles";
 
 export interface CopiesInfo {
     /** Folder (settings copies) or file (database copy) */
@@ -50,6 +52,20 @@ export const KeptCopies = {
         const entries = await readDir(dir);
         const {files, bytes} = await measure(dir);
         return {path: dir, count: entries.filter(e => e.isDirectory && !e.isSymlink).length, files, bytes};
+    },
+
+    /** Earlier versions of edited game config files (one file per save) */
+    async configCopies(): Promise<CopiesInfo> {
+        const dir = await GameConfigFiles.backupsFolder();
+        if (!(await exists(dir))) return {path: dir, count: 0, files: 0, bytes: 0};
+        const {files, bytes} = await measure(dir);
+        return {path: dir, count: files, files, bytes};
+    },
+
+    async deleteConfigCopies(): Promise<void> {
+        const dir = await GameConfigFiles.backupsFolder();
+        if (!dir.replace(/[\\/]+$/, "").endsWith("config-backups")) throw new Error(`unexpected folder ${dir}`);
+        if (await exists(dir)) await remove(dir, {recursive: true});
     },
 
     async deleteSettingsCopies(): Promise<void> {
