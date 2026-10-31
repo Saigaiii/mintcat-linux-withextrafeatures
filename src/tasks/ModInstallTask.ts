@@ -425,6 +425,7 @@ export class ModInstallTask implements ITask {
             await DeployLog.record(gameName, {
                 time: Date.now(),
                 profile: activeProfileData.displayName || activeProfileData.name,
+                profileId: activeProfileData.id,
                 mods: deployed,
             });
         } catch (e) {

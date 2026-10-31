@@ -43,6 +43,8 @@ import {TimeUtils} from "@/utils/TimeUtils.ts";
 import type {FolderInfo} from "./TreeView";
 import {ConflictService, type ModConflictSummary} from "@/services/ConflictService";
 import {ModConflictDetails} from "@/components/ConflictDetails";
+import {SUMMARY_COLOR} from "@/services/ConflictInsights";
+import {TreeViewConverter} from "./TreeViewConverter";
 import {useInstallOrder, useShowLocalPaths} from "@/services/ListDisplay";
 import {RepositoryUpdates} from "@/services/RepositoryUpdates";
 import {logActivity} from "@/services/ActivityLog";
@@ -255,6 +257,8 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
     useFilteredEventListener('mod-enabled-change', (p) => modIds.has(p.modId), () => recount(), [modIds]);
     useFilteredEventListener('mod-batch-enabled-change', (p) => p.modIds.some(id => modIds.has(id)), () => recount(), [modIds]);
     const counts = folderCounts(nodeData, (m: any) => getPendingEnabled(m.modId, m.enabled !== false));
+    // During a search the counts are of the shown mods; the folder's actions still act on all of them
+    const filtering = TreeViewConverter.isFiltering();
 
     const manyMenu: MenuProps['items'] = [
         {type: 'group', label: t('folders.pickedCount', {count: many})},
@@ -284,9 +288,9 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
             children: moveToChildren,
         }] : []),
         {type: 'divider'},
-        {label: t('folders.enableAll'), key: 'folders_enable', icon: <PlayCircleOutlined />, disabled: counts.total === 0},
-        {label: t('folders.disableAll'), key: 'folders_disable', icon: <PauseCircleOutlined />, disabled: counts.total === 0},
-        {label: t('folders.onlyThis'), key: 'folders_only', icon: <AimOutlined />, disabled: counts.total === 0},
+        {label: t('folders.enableAll'), key: 'folders_enable', icon: <PlayCircleOutlined />, disabled: counts.total === 0 && !filtering},
+        {label: t('folders.disableAll'), key: 'folders_disable', icon: <PauseCircleOutlined />, disabled: counts.total === 0 && !filtering},
+        {label: t('folders.onlyThis'), key: 'folders_only', icon: <AimOutlined />, disabled: counts.total === 0 && !filtering},
         {type: 'divider'},
         // this folder only (the toolbar button opens or closes all of them)
         expanded
@@ -333,7 +337,8 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
                     >
                       <b><FolderOutlined/> {nodeData.title}</b>
                       <span className="folder-counts">
-                          {` · ${counts.total}`}{counts.off > 0 ? ` · ${t('folders.off', {count: counts.off})}` : ""}
+                          {filtering ? ` · ${t('folders.shownCount', {count: counts.total})}` : ` · ${counts.total}`}
+                          {counts.off > 0 ? ` · ${t('folders.off', {count: counts.off})}` : ""}
                       </span>
                     </span>
         </Dropdown>
@@ -867,13 +872,7 @@ function ModTreeViewWarring({nodeData, onLocate}: { nodeData: any; onLocate?: ()
     const conflictSummary = hasConflict
         ? summarizeConflicts(nodeData.modId, installOrder, conflictVersion)
         : 'harmless';
-    const conflictColor: Record<ModConflictSummary, string> = {
-        noEffect: '#ff4d4f',
-        losesGameplay: '#fa8c16',
-        losesCosmetic: '#fadb14',
-        harmless: '#8c8c8c',
-        winsAll: '#8c8c8c',
-    };
+    const conflictColor: Record<ModConflictSummary, string> = SUMMARY_COLOR;
 
     // 生成冲突提示信息
     const conflictModCount = conflictCountAt(nodeData.modId, conflictVersion);
@@ -1249,7 +1248,7 @@ function PositionBadge({nodeKey, position, enabled, onMove, groupSize = 0, group
     nodeKey: string;
     position: number;
     enabled: boolean;
-    onMove?: (sourceKey: string, position: number) => void | Promise<void>;
+    onMove?: (sourceKey: string, position: number) => unknown;
     /** How many picked mods move together with this one (0: only this one) */
     groupSize?: number;
     /** Number of the first of them */
@@ -1377,7 +1376,7 @@ export interface TreeViewItemProps {
     folders?: FolderInfo[];
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
     /** Move a mod to another install position (1 = top); only when its position is known */
-    onMoveToPosition?: (sourceKey: string, position: number) => void | Promise<void>;
+    onMoveToPosition?: (sourceKey: string, position: number) => unknown;
     itemOrder?: number;
     /** Picked mods that move with this one (0 when it isn't one of several picked) */
     groupSize?: number;

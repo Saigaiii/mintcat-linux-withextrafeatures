@@ -74,7 +74,9 @@ import type { UpdateReview } from "@/services/RepositoryUpdates";
 import { openMintImport } from "@/dialogs/MintImportDialog";
 import { ModDescriptions } from "@/services/ModDescriptions";
 import { ConflictService } from "@/services/ConflictService";
-import { ConflictReport } from "@/components/ConflictDetails";
+import { openConflictReport } from "@/components/ConflictDetails";
+import { ConflictActions } from "@/services/ConflictActions";
+import type { SuggestedAction } from "@/services/ConflictInsights";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
 import { isUe4ssEnabled } from "@/utils/Ue4ssSetting";
 import { perfMark, perfUntilPainted } from "@/utils/perfTrace";
@@ -180,8 +182,11 @@ export class HomePage extends BasePage<any, ModListPageState> {
      * This keeps the "unsaved" state correct after switching profiles.
      */
     private lastDeployState = "";
+    /** Runs can overlap (many callers don't wait); only the latest one may update the button */
+    private unsavedRun = 0;
 
     private async refreshUnsavedState(): Promise<void> {
+        const run = ++this.unsavedRun;
         try {
             const profileVM = await IoC.get(ProfileViewModel);
             const savedHash = await profileVM.getActiveProfileInstallHash();
@@ -230,7 +235,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
             let missing = false;
             if (!hasUnsaved && enabledMods.length > 0 && activeGame?.installPath) {
                 try {
-                    missing = (await IntegrateApi.checkInstalled(activeGame.installPath, 0)) !== "mintcat_installed";
+                    // An old MINT pak (mods_P.pak) is reported first, whether or not MINTCAT's own
+                    // pak is there too: only "nothing installed" means the mods are gone
+                    missing = (await IntegrateApi.checkInstalled(activeGame.installPath, 0)) === "no_installed";
                 } catch {
                     missing = false;
                 }
@@ -246,9 +253,14 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 console.info(`[deploy-state] ${why} (${enabledMods.length} enabled)`);
             }
             const activeName = activeProfile.displayName || activeProfile.name;
+            // by id when the record has one: a renamed profile is still the same profile
+            const otherProfile = lastDeploy && (lastDeploy.profileId !== undefined
+                ? lastDeploy.profileId !== activeProfile.id
+                : lastDeploy.profile !== activeName);
             const deployedOtherProfile = deployState === "pending" && lastDeploy && !lastDeploy.uninstalled
-                && lastDeploy.profile && lastDeploy.profile !== activeName ? lastDeploy.profile : undefined;
+                && lastDeploy.profile && otherProfile ? lastDeploy.profile : undefined;
             const solo = await this.readSolo(activeProfile.id!);
+            if (run !== this.unsavedRun) return;
             this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, lastDeploy,
                 solo: solo ? {folders: solo.folders, time: solo.time} : null });
         } catch (e) {
@@ -426,14 +438,12 @@ export class HomePage extends BasePage<any, ModListPageState> {
         });
 
         if (confirm) {
+            const ids: number[] = [];
             for (const key of this.getBulkOpKeys()) {
                 const modId = this.extractModIdFromKey(key);
-                if (modId === null) continue;
-                const modItem = await this.getModById(modId);
-                if (modItem) {
-                    await vm.removeMod(modItem.modId!);
-                }
+                if (modId !== null) ids.push(modId);
             }
+            await vm.removeMods(ids);
             this.setState((state) => ({
                 checkedKeys: [],
                 ...(state.autoMultiSelect ? { isMultiSelect: false, autoMultiSelect: false } : {}),
@@ -703,13 +713,32 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     @autoBind
     private showConflictReport() {
-        MessageBox.info({
-            title: t("conflict.reportTitle"),
-            icon: null,
-            width: 680,
-            maskClosable: true,
-            content: React.createElement(ConflictReport),
-        });
+        openConflictReport();
+    }
+
+    /** Fixes offered in the conflict details: move a mod above another, turn one off, show it */
+    @autoBind
+    private async runConflictAction(action: SuggestedAction): Promise<boolean> {
+        const tree = this.treeViewRef.current;
+        if (!tree) return false;
+        switch (action.kind) {
+            case 'swap':
+                return tree.moveModAbove(action.modId, action.aboveId);
+            case 'reveal':
+                return tree.revealMod(action.modId);
+            case 'disable': {
+                const vm = await IoC.get(HomeViewModel);
+                await vm.batchSetModEnabled([action.modId], false, false);
+                await logActivity('info', t("log.conflicts.disabled", {name: ConflictService.getModName(action.modId)}), undefined, 'conflicts');
+                await emitEvent("mod-batch-enabled-change", {modIds: [action.modId], enabled: false});
+                clearPendingEnabled();
+                ConflictService.forgetMod(action.modId);
+                // also refreshes the Deploy button
+                await this.updateTreeView();
+                await this.updateCountLabel();
+                return true;
+            }
+        }
     }
 
     @autoBind
@@ -983,7 +1012,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
             const modsApi = await StorageAPI.getMods();
             const basic = await modsApi.getAllMods();
             const allMods = await modsApi.getBatchCompleteModDataOptimized(basic.map(m => m.modId!));
-            const converter = new TreeViewConverter(allMods);
+            const profiles = await StorageAPI.getProfiles();
+            const active = await profiles.getActiveProfile();
+            // with the per-mod settings, so saving keeps each mod's chosen version
+            const converter = new TreeViewConverter(allMods, active?.id ? await profiles.getProfileMods(active.id) : []);
             // Work on the whole list, not only what the search shows
             const filterList = TreeViewConverter.filterList;
             TreeViewConverter.filterList = [];
@@ -1356,7 +1388,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     /** Folders ticked as a whole, in list order */
     private pickedFolderKeys(): string[] {
-        if (!this.state.isMultiSelect) return [];
+        // While a search hides part of the list, "all its mods ticked" can't be told from the
+        // shown mods: folder actions would change mods the search hides
+        if (!this.state.isMultiSelect || TreeViewConverter.isFiltering()) return [];
         const raw: any = this.state.checkedKeys;
         return pickedFolders(this.state.treeData as any[], Array.isArray(raw) ? raw : (raw?.checked ?? []));
     }
@@ -1407,9 +1441,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
             nameList(keys.map(k => this.folderTitle(k, full.treeData))), 'list');
         await emitEvent("mod-batch-enabled-change", {modIds: ids, enabled: enable});
         clearPendingEnabled();
+        // also refreshes the Deploy button
         await this.updateTreeView();
         await this.updateCountLabel();
-        this.refreshUnsavedState();
     }
 
     private async moveFoldersTo(keys: string[], target: string | null) {
@@ -1437,19 +1471,23 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const mods = modsWithin(tree, top);
         const names = top.map(k => this.folderTitle(k, tree));
         const canDeleteAll = goneWithMods.length < allFolders.length;
-        const canKeep = new Set(keys).size < allFolders.length;
+        // only the top folders go when keeping their contents (subfolders stay as folders)
+        const canKeep = top.length < allFolders.length;
         if (!canDeleteAll && !canKeep) {
             message.warning(t("group.cannotDeleteLast"));
             return;
         }
         const one = top.length === 1;
         const choices: { key: string; label: string; danger?: boolean; primary?: boolean }[] = [];
-        if (mods.length > 0 && canKeep) choices.push({key: "keep", label: t(one ? "folders.deleteKeepModsOne" : "folders.deleteKeepMods"), primary: true});
+        const subfolders = goneWithMods.length - top.length;
+        // keeping makes sense when there's something inside, or when it's the only way
+        if (canKeep && (mods.length > 0 || subfolders > 0 || !canDeleteAll)) {
+            choices.push({key: "keep", label: t(one ? "folders.deleteKeepModsOne" : "folders.deleteKeepMods"), primary: true});
+        }
         // red and solid: the themes grey out plain buttons, also red ones
         if (canDeleteAll) choices.push(mods.length > 0
             ? {key: "all", label: t(one ? "folders.deleteWithModsOne" : "folders.deleteWithMods", {count: mods.length}), danger: true, primary: true}
             : {key: "all", label: t("group.deleteOk"), danger: true, primary: true});
-        const subfolders = goneWithMods.length - top.length;
         const subText = subfolders > 0 ? t("folders.deleteSub", {count: subfolders}) : "";
         const ask = mods.length
             ? t(one ? "folders.deleteAskOne" : "folders.deleteAskMany", {name: names[0], folders: top.length, count: mods.length, sub: subText})
@@ -1465,7 +1503,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
         if (!choice) return;
         try {
             if (choice === "keep") {
-                if (!(await this.treeViewRef.current?.dissolveFolders(keys))) return;
+                if (!(await this.treeViewRef.current?.dissolveFolders(top))) return;
             } else {
                 const vm = await IoC.get(HomeViewModel);
                 for (const key of top) {
@@ -1526,14 +1564,21 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const walkTop = (full.treeData as any[]).filter(n => n.isLeaf);
         const everyMod = [...all, ...walkTop];
         const keep = new Set(modsWithin(full.treeData, keys).map(m => m.modId));
+        // nothing to keep on would turn every mod off
+        if (keep.size === 0) {
+            message.warning(t("folders.onlyEmpty"));
+            return;
+        }
         const names = keys.length > 1 ? topmost(full.treeData, keys).map(k => this.folderTitle(k, full.treeData)) : [this.folderTitle(keys[0], full.treeData)];
         const before = await this.readSolo(profile.id);
+        // the first time only: that's the way back. Mods added since then join it as they are now
+        const known = new Set(before?.all ?? []);
+        const added = everyMod.filter(m => !known.has(m.modId!));
         const snapshot = {
             time: before?.time ?? Date.now(),
             folders: names,
-            // the first time only: that's the way back
-            enabled: before?.enabled ?? everyMod.filter(m => m.enabled !== false).map(m => m.modId!),
-            all: before?.all ?? everyMod.map(m => m.modId!),
+            enabled: [...(before?.enabled ?? []), ...added.filter(m => m.enabled !== false).map(m => m.modId!)],
+            all: [...(before?.all ?? []), ...added.map(m => m.modId!)],
         };
         await (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id), JSON.stringify(snapshot));
         const on = everyMod.filter(m => keep.has(m.modId)).map(m => m.modId!);
@@ -1545,9 +1590,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
         if (on.length) await emitEvent("mod-batch-enabled-change", {modIds: on, enabled: true});
         if (off.length) await emitEvent("mod-batch-enabled-change", {modIds: off, enabled: false});
         clearPendingEnabled();
+        // also refreshes the Deploy button
         await this.updateTreeView();
         await this.updateCountLabel();
-        await this.refreshUnsavedState();
     }
 
     /** Put every mod back on or off as it was before "Only these folders on" (or keep it as it is) */
@@ -1556,10 +1601,12 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const profile = await (await StorageAPI.getProfiles()).getActiveProfile();
         if (!profile?.id) return;
         const snapshot = await this.readSolo(profile.id);
-        await (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id), "");
+        const forget = async () => (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id!), "");
         if (snapshot && restore) {
             const full = await this.treeViewRef.current?.fullTree();
-            if (full) {
+            // keep the way back until it has been used
+            if (!full) return;
+            {
                 const everyMod = [...modsWithin(full.treeData, folderKeysInOrder(full.treeData)), ...(full.treeData as any[]).filter(n => n.isLeaf)];
                 const wasOn = new Set(snapshot.enabled);
                 const known = new Set(snapshot.all);
@@ -1573,11 +1620,15 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 if (on.length) await emitEvent("mod-batch-enabled-change", {modIds: on, enabled: true});
                 if (off.length) await emitEvent("mod-batch-enabled-change", {modIds: off, enabled: false});
                 clearPendingEnabled();
+                await forget();
                 await this.updateTreeView();
                 await this.updateCountLabel();
             }
         } else if (snapshot) {
+            await forget();
             await logActivity('info', t("log.list.soloKept"), undefined, 'list');
+        } else {
+            await forget();
         }
         await this.refreshUnsavedState();
     }
@@ -1661,8 +1712,15 @@ export class HomePage extends BasePage<any, ModListPageState> {
         if (!solo) return null;
         return (
             <Alert type="warning" showIcon
-                   style={{margin: "0 4px 4px", padding: "4px 10px"}}
-                   message={t("folders.soloBanner", {folders: nameList(solo.folders, 4)})}
+                   style={{margin: "0 4px 4px", padding: "4px 10px", height: HomePage.SOLO_BANNER_HEIGHT - 4, overflow: "hidden"}}
+                   // one line (the list below is sized for it); the whole text on hover
+                   title={
+                       <Tooltip title={t("folders.soloBanner", {folders: nameList(solo.folders, 20)})}>
+                           <div style={{whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>
+                               {t("folders.soloBanner", {folders: nameList(solo.folders, 4)})}
+                           </div>
+                       </Tooltip>
+                   }
                    action={
                        <Space size={4}>
                            <Button size="small" type="primary" icon={<UndoOutlined/>} onClick={() => void this.endSolo(true)}>
@@ -1856,6 +1914,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
     async componentDidMount(): Promise<void> {
         perfMark('home:mount');
         window.addEventListener("keydown", this.onListKeyDown);
+        ConflictActions.setHandler(this.runConflictAction);
         // Wait for core to be ready
         if (!AppInitializer.isCoreReady()) {
             await AppInitializer.initializeCore();
@@ -1973,6 +2032,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     componentWillUnmount(): void {
         window.removeEventListener("keydown", this.onListKeyDown);
+        ConflictActions.setHandler(null);
         this.unhookLogPanel();
         this.unhookWindowResized();
         this.unlistenFocusRecheck?.();

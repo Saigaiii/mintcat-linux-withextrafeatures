@@ -18,6 +18,21 @@ import {MessageBox} from "@/components/MessageBox";
 import {logActivity, nameList} from "@/services/ActivityLog";
 import {t} from "i18next";
 import { IoC } from "@/core/IoC";
+import type {ProfileModData} from "@/storage/dao/ProfileDAO";
+
+/**
+ * The active profile's per-mod settings (on/off, chosen version): a tree built without them
+ * saves every mod's chosen version as "none"
+ */
+async function activeProfileMods(): Promise<ProfileModData[]> {
+    try {
+        const profiles = await StorageAPI.getProfiles();
+        const profile = await profiles.getActiveProfile();
+        return profile?.id ? await profiles.getProfileMods(profile.id) : [];
+    } catch {
+        return [];
+    }
+}
 
 /** A folder's "Parent/Child" path in a tree, as folder colors are keyed (null when not a folder there) */
 function folderPathOf(nodes: any[] | undefined, key: string, path: string[] = []): string | null {
@@ -288,7 +303,7 @@ export class TreeView extends React.Component<TreeViewProps> {
         const profileVM = await IoC.get(ProfileViewModel);
         const activeRoot = await profileVM.getActiveProfileTreeRoot();
         const modList = await this.getAllModsAsList();
-        const converter = new TreeViewConverter(modList);
+        const converter = new TreeViewConverter(modList, await activeProfileMods());
 
         const filterList = TreeViewConverter.filterList;
         TreeViewConverter.filterList = [];
@@ -367,12 +382,12 @@ export class TreeView extends React.Component<TreeViewProps> {
      * mod's folder.
      */
     @autoBind
-    private async onMoveToPosition(sourceKey: string, position: number) {
+    private async onMoveToPosition(sourceKey: string, position: number, single = false, how?: string): Promise<boolean> {
         const order = InstallOrder.get();
         await IoC.get(TreeViewModel);
         const profileVM = await IoC.get(ProfileViewModel);
         const activeRoot = await profileVM.getActiveProfileTreeRoot();
-        const converter = new TreeViewConverter(await this.getAllModsAsList());
+        const converter = new TreeViewConverter(await this.getAllModsAsList(), await activeProfileMods());
         // Work on the whole list, not only what the search shows
         const filterList = TreeViewConverter.filterList;
         TreeViewConverter.filterList = [];
@@ -380,33 +395,64 @@ export class TreeView extends React.Component<TreeViewProps> {
         TreeViewConverter.filterList = filterList;
 
         // one of several picked mods: they all go, in their order
-        const group = this.groupOf(sourceKey);
-        if (group && !(await this.confirmGroupMove(group))) return;
+        const group = single ? null : this.groupOf(sourceKey);
+        if (group && !(await this.confirmGroupMove(group))) return false;
         const folders = group
             ? moveGroupToPosition(treeData, order, group, position)
             : moveToPosition(treeData, order, sourceKey, position);
-        if (!folders) return;
+        if (!folders) return false;
         const shownKey = group ? group[0] : sourceKey;
 
         try {
             const profileTreeItem = converter.convertFrom(treeData);
-            if (!profileTreeItem || profileTreeItem.children.length === 0) return;
+            if (!profileTreeItem || profileTreeItem.children.length === 0) return false;
             // open the folders it lands in, so it stays in view
             const expanded = (this.props.expandedKeys ?? []).map(String);
             const missing = folders.filter(k => !expanded.includes(k));
             if (missing.length > 0) this.props.onTreeNodeExpand?.([...expanded, ...missing]);
 
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
-            await logMove(treeData, sourceKey, group, t("log.list.howNumber"));
+            await logMove(treeData, sourceKey, group, how ?? t("log.list.howNumber"));
             this.props.onModListChange?.();
             await this.props.onUpdateTreeView?.();
             // Highlight it, unless mods are being picked with checkboxes: a plain select would
             // end that and drop the picked mods
             if (!this.props.isMultiSelect) this.props.onTreeNodeSelect?.([sourceKey]);
             requestAnimationFrame(() => this.treeRef.current?.scrollTo?.({key: shownKey, align: "auto"}));
+            return true;
         } catch (error) {
             console.error(`[TreeView] Error moving ${sourceKey} to position ${position}:`, error);
+            return false;
         }
+    }
+
+    /** Move one mod right above another, so it wins the files they share; false if it couldn't */
+    public async moveModAbove(modId: number, aboveId: number): Promise<boolean> {
+        const order = InstallOrder.get();
+        const from = order.indexOf(modId);
+        const target = order.indexOf(aboveId);
+        if (from < 0 || target < 0) return false;
+        if (from < target) return true;
+        const {treeData} = await this.fullTree();
+        const leaf = leavesInOrder(treeData).find(l => l.node.modId === modId);
+        if (!leaf) return false;
+        return this.onMoveToPosition(String(leaf.node.key), target + 1, true, t("log.list.howConflict"));
+    }
+
+    /** Open the folders a mod is in, select it and scroll to it */
+    public async revealMod(modId: number): Promise<boolean> {
+        const {treeData} = await this.fullTree();
+        const leaf = leavesInOrder(treeData).find(l => l.node.modId === modId);
+        if (!leaf) return false;
+        const key = String(leaf.node.key);
+        const expanded = (this.props.expandedKeys ?? []).map(String);
+        const missing = leaf.folders.filter(k => !expanded.includes(k));
+        if (missing.length > 0) this.props.onTreeNodeExpand?.([...expanded, ...missing]);
+        if (!this.props.isMultiSelect) this.props.onTreeNodeSelect?.([key]);
+        // after the folders have opened
+        requestAnimationFrame(() => requestAnimationFrame(() =>
+            this.treeRef.current?.scrollTo?.({key, align: "auto"})));
+        return true;
     }
 
     @autoBind
@@ -418,7 +464,7 @@ export class TreeView extends React.Component<TreeViewProps> {
         const profileVM = await IoC.get(ProfileViewModel);
         const activeRoot = await profileVM.getActiveProfileTreeRoot();
         const modList = await this.getAllModsAsList();
-        const converter = new TreeViewConverter(modList);
+        const converter = new TreeViewConverter(modList, await activeProfileMods());
 
         const filterList = TreeViewConverter.filterList;
         TreeViewConverter.filterList = [];
@@ -518,7 +564,9 @@ export class TreeView extends React.Component<TreeViewProps> {
         const c = this.folderPickCache;
         if (c && c.treeData === treeData && c.checked === checkedKeys && c.multi === !!isMultiSelect) return c;
         const raw: any = checkedKeys;
-        const picked = isMultiSelect ? pickedFolders(treeData as any[], Array.isArray(raw) ? raw : (raw?.checked ?? [])) : [];
+        // not while a search hides part of the list (see HomePage.pickedFolderKeys)
+        const picked = isMultiSelect && !TreeViewConverter.isFiltering()
+            ? pickedFolders(treeData as any[], Array.isArray(raw) ? raw : (raw?.checked ?? [])) : [];
         const top = topmost(treeData as any[], picked);
         const exclude = top.length > 1 ? withSubfolders(treeData as any[], picked) : [];
         this.folderPickCache = {treeData, checked: checkedKeys, multi: !!isMultiSelect, picked, top, exclude};
@@ -530,7 +578,7 @@ export class TreeView extends React.Component<TreeViewProps> {
         await IoC.get(TreeViewModel);
         const profileVM = await IoC.get(ProfileViewModel);
         const activeRoot = await profileVM.getActiveProfileTreeRoot();
-        const converter = new TreeViewConverter(await this.getAllModsAsList());
+        const converter = new TreeViewConverter(await this.getAllModsAsList(), await activeProfileMods());
         const filterList = TreeViewConverter.filterList;
         TreeViewConverter.filterList = [];
         try {
@@ -576,26 +624,27 @@ export class TreeView extends React.Component<TreeViewProps> {
      */
     public async moveFolders(keys: string[], target: string | null): Promise<boolean> {
         const {treeData, converter} = await this.fullTree();
-        const names = keys.map(k => titleOf(treeData, k));
+        const titles = new Map(keys.map(k => [k, titleOf(treeData, k)]));
         const before = TreeView.pathsOf(treeData);
         const moved = moveFoldersInto(treeData, keys, target);
         if (!moved) return false;
         if (moved.length === 0) return true;
         if (!(await this.saveTree(treeData, converter, before))) return false;
+        // the folders that moved (their subfolders went along)
         await logActivity('info', t("log.list.foldersMoved", {count: moved.length, folder: target ? titleOf(treeData, target) : t("log.list.topLevel")}),
-            nameList(names), 'list');
+            nameList(moved.map(k => titles.get(k) ?? k)), 'list');
         return true;
     }
 
     /** Delete folders but keep their mods: what was in each folder takes its place */
     public async dissolveFolders(keys: string[]): Promise<boolean> {
         const {treeData, converter} = await this.fullTree();
-        const names = keys.map(k => titleOf(treeData, k));
+        const titles = new Map(keys.map(k => [k, titleOf(treeData, k)]));
         const before = TreeView.pathsOf(treeData);
         const gone = dissolveFolders(treeData, keys);
         if (gone.length === 0) return true;
         if (!(await this.saveTree(treeData, converter, before))) return false;
-        await logActivity('info', t("log.list.foldersDissolved", {count: gone.length}), nameList(names), 'list');
+        await logActivity('info', t("log.list.foldersDissolved", {count: gone.length}), nameList(gone.map(k => titles.get(k) ?? k)), 'list');
         return true;
     }
 

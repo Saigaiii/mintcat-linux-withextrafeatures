@@ -11,9 +11,9 @@ export function setMessageBoxThemedModal(modal: ReturnType<typeof App.useApp>["m
 
 export class MessageBox {
 
-    /** Themed information dialog (closes with OK) */
-    static info(props: ModalFuncProps): void {
-        (themedModal ?? Modal).info(props);
+    /** Themed information dialog (closes with OK); returns a handle to close it from code */
+    static info(props: ModalFuncProps): { destroy: () => void } {
+        return (themedModal ?? Modal).info(props);
     }
 
     static async confirm(props: ModalFuncProps): Promise<boolean> {

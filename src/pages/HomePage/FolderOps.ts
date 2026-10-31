@@ -182,14 +182,32 @@ export function moveFoldersInto(nodes: TreeNode[], keys: string[], target: strin
             if (key === target || (node && findNode(node.children, target))) return null;
         }
     }
+    if (target === null) {
+        // To the top level: folders already there stay put; others go right after the
+        // top-level folder they were in, so the install order changes as little as possible
+        const moved: string[] = [];
+        for (const key of moving) {
+            if (nodes.some(n => String(n.key) === key)) continue;
+            const ancestor = nodes.find(n => !n.isLeaf && findNode(n.children, key));
+            const at = locate(nodes, key);
+            if (!at || !ancestor) continue;
+            const [node] = at.list.splice(at.index, 1);
+            // after the ancestor and any folders already moved out of it
+            let index = nodes.indexOf(ancestor) + 1;
+            while (index < nodes.length && moved.includes(String(nodes[index].key))) index++;
+            nodes.splice(index, 0, node);
+            moved.push(key);
+        }
+        return moved;
+    }
     const taken: TreeNode[] = [];
     for (const key of moving) {
         const at = locate(nodes, key);
         if (!at) continue;
         taken.push(...at.list.splice(at.index, 1));
     }
-    const into = target === null ? nodes : (findNode(nodes, target)!.children ??= []);
-    into.push(...taken);
+    // to the top of the folder, like moving one folder (or a mod) into a folder
+    (findNode(nodes, target)!.children ??= []).unshift(...taken);
     return taken.map(n => String(n.key));
 }
 

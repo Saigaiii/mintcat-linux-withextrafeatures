@@ -23,6 +23,11 @@ export class TreeViewConverter {
 
     public static filterList?: string[] = [];
 
+    /** A search or filter is hiding part of the list */
+    public static isFiltering(): boolean {
+        return (TreeViewConverter.filterList ?? []).some(f => f && f !== "All");
+    }
+
     /** Folder key ("folder-<id>") → folder color key, from the last list built */
     public static folderColorKeys: Record<string, string> = {};
 

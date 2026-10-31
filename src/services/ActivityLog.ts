@@ -67,9 +67,12 @@ function notify() {
 
 function push(level: ActivityLevel, message: string, detail: string | undefined, source: string) {
     if (!message) return;
-    // The same problem reported twice at once (e.g. an install error that is also an app error)
+    // The same problem reported twice at once (e.g. an install error that is also an app error).
+    // Only problems: two quick "Enabled 5 mod(s)" on different mods are two entries
     const last = entries[entries.length - 1];
-    if (last && last.message === message && last.level === level && Date.now() - last.time < 3000) return;
+    const problem = level === 'error' || level === 'warning';
+    if (problem && last && last.message === message && last.level === level
+        && (last.detail === detail || !last.detail || !detail) && Date.now() - last.time < 3000) return;
     entries.push({id: nextId++, time: Date.now(), level, message, detail, source});
     if (entries.length > MAX_ENTRIES) {
         entries.splice(0, entries.length - MAX_ENTRIES);

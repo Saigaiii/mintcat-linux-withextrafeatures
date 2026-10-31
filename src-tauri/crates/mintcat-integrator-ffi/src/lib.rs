@@ -4,11 +4,13 @@ use std::ptr;
 
 use anyhow::{Context, Result};
 use mintcat_integrator_api::{
-    CheckForeignPaksRequest, CheckInstalledRequest, CheckModConflictsRequest, FindGamePakRequest,
+    CheckForeignPaksRequest, CheckInstalledRequest, CheckModConflictsRequest, ConflictAssetDiffRequest,
+    ConflictAssetsSummaryRequest, FindGamePakRequest,
     InstallEvent, InstallProgress, InstallRequest, PathRequest, UninstallModsRequest,
 };
 use mintcat_integrator_core::{
-    check_foreign_paks_by_game_path, check_installed_by_game_path, check_mod_conflicts_from_json,
+    check_foreign_paks_by_game_path, check_installed_by_game_path, check_mod_conflicts_with_game,
+    conflict_asset_diff, conflict_assets_summary,
     find_game_pak_by_name, install_mods_with_progress, is_valid_mod_directory, is_valid_zip,
     uninstall_mods_by_game_path,
 };
@@ -97,6 +99,8 @@ pub unsafe extern "C" fn mintcat_backend_runtime_manifest(
                 {"name": "check_foreign_paks_in_paks_dir", "mode": "requestResponse"},
                 {"name": "is_valid_unpacked_mod", "mode": "requestResponse"},
                 {"name": "check_mod_conflicts", "mode": "requestResponse"},
+                {"name": "conflict_asset_diff", "mode": "requestResponse"},
+                {"name": "conflict_assets_summary", "mode": "requestResponse"},
                 {"name": "validate_zip_file", "mode": "requestResponse"},
                 {"name": "launch_steam_game", "mode": "requestResponse"},
                 {"name": "check_steam_game", "mode": "requestResponse"},
@@ -282,8 +286,12 @@ pub unsafe extern "C" fn mintcat_integrator_check_mod_conflicts(
         response_json,
         error_message,
         |request: CheckModConflictsRequest| {
-            check_mod_conflicts_from_json(&request.mod_list_json, request.game_name.as_deref())
-                .map_err(anyhow::Error::msg)
+            check_mod_conflicts_with_game(
+                &request.mod_list_json,
+                request.game_name.as_deref(),
+                request.game_pak_path.as_deref(),
+            )
+            .map_err(anyhow::Error::msg)
         },
     )
 }
@@ -362,8 +370,22 @@ unsafe fn backend_invoke(
         }),
         "check_mod_conflicts" => {
             backend_command_response(envelope.payload, |request: CheckModConflictsRequest| {
-                check_mod_conflicts_from_json(&request.mod_list_json, request.game_name.as_deref())
-                    .map_err(anyhow::Error::msg)
+                check_mod_conflicts_with_game(
+                    &request.mod_list_json,
+                    request.game_name.as_deref(),
+                    request.game_pak_path.as_deref(),
+                )
+                .map_err(anyhow::Error::msg)
+            })
+        }
+        "conflict_asset_diff" => {
+            backend_command_response(envelope.payload, |request: ConflictAssetDiffRequest| {
+                conflict_asset_diff(request)
+            })
+        }
+        "conflict_assets_summary" => {
+            backend_command_response(envelope.payload, |request: ConflictAssetsSummaryRequest| {
+                conflict_assets_summary(request)
             })
         }
         "validate_zip_file" => backend_command_response(envelope.payload, |request: PathRequest| {

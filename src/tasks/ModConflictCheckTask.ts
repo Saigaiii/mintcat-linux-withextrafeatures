@@ -4,7 +4,7 @@ import { IoC } from '@/core/IoC.ts';
 import { StorageAPI } from '@/storage';
 import { exists, stat } from '@tauri-apps/plugin-fs';
 import { t } from 'i18next';
-import { ConflictService, ConflictModMeta, ModConflictResponse } from '@/services/ConflictService';
+import { ConflictService, ConflictModMeta, ModConflictResponse, ConflictAssetSummary } from '@/services/ConflictService';
 import { flattenTreeModIds, sortByDisplayOrder } from '@/utils/ModDisplayOrder';
 import { emitEvent } from '@/events';
 import { BackendRuntimeApi } from '@/apis/BackendRuntimeApi';
@@ -22,6 +22,23 @@ async function isValidUnpackedMod(dirPath: string): Promise<boolean> {
     } catch (e) {
         return false;
     }
+}
+
+/** Assets (.uasset/.umap based) shared by two or more mods, for the part-by-part comparison */
+function sharedAssets(conflicts: ModConflictResponse[]): { assetPath: string; modIds: number[] }[] {
+    const byAsset = new Map<string, Set<number>>();
+    for (const conflict of conflicts) {
+        for (const file of conflict.conflicting_files) {
+            const match = /^(.*)\.(uasset|umap)$/i.exec(file);
+            if (!match) continue;
+            const set = byAsset.get(match[1]) ?? new Set<number>();
+            set.add(conflict.mod_id);
+            byAsset.set(match[1], set);
+        }
+    }
+    return Array.from(byAsset.entries())
+        .filter(([, mods]) => mods.size > 1)
+        .map(([assetPath, mods]) => ({assetPath, modIds: Array.from(mods)}));
 }
 
 /**
@@ -72,6 +89,9 @@ export class ModConflictCheckTask implements ITask {
 
         const activeGame = await gameDAO.getGameById(activeProfileData.gameId);
         const gameName = activeGame?.name ?? undefined;
+        // The game's own pak: tells files that replace game files from files mods add, and
+        // lets each mod's version of a shared file be compared with the game's original
+        const gamePakPath = activeGame?.installPath || undefined;
 
         // Get enabled mods from profile
         const profileMods = await profilesDAO.getProfileMods(activeProfileData.id);
@@ -161,6 +181,7 @@ export class ModConflictCheckTask implements ITask {
             const conflicts = await BackendRuntimeApi.invoke<ModConflictResponse[]>('check_mod_conflicts', {
                 modListJson: JSON.stringify(modInfoList),
                 gameName: gameName ?? null,
+                gamePakPath: gamePakPath ?? null,
             });
 
             await context.updateProgress(80);
@@ -174,6 +195,33 @@ export class ModConflictCheckTask implements ITask {
             } else {
                 // Store conflicts in service
                 ConflictService.setConflicts(conflicts, modMeta);
+                const conflicting = new Set(conflicts.map(c => c.mod_id));
+                ConflictService.setDiffContext({
+                    gameName,
+                    gamePakPath,
+                    mods: modInfoList.filter(m => conflicting.has(m.mod_id)),
+                });
+
+                // What each mod changes in the shared assets, compared to the game: tells
+                // copies that make the same changes from ones that change different parts
+                // (could work together) or the same parts (a real clash)
+                await context.setMessage(t('conflict.comparingChanges'));
+                const assets = sharedAssets(conflicts);
+                if (assets.length > 0) {
+                    try {
+                        const summaries = await BackendRuntimeApi.invoke<ConflictAssetSummary[]>('conflict_assets_summary', {
+                            gameName: gameName ?? null,
+                            gamePakPath: gamePakPath ?? null,
+                            mods: modInfoList.filter(m => conflicting.has(m.mod_id))
+                                .map(m => ({modId: m.mod_id, cachePath: m.cache_path, isUnpacked: m.is_unpacked})),
+                            assets,
+                        });
+                        ConflictService.setAssetSummaries(summaries);
+                    } catch (error) {
+                        // Only the extra detail is missing; the file-level results stand
+                        console.warn('Comparing shared assets failed:', error);
+                    }
+                }
                 
                 const conflictCount = conflicts.length;
                 await context.setMessage(`${t('Detected')} ${conflictCount} ${t('mods with conflicts')}`);

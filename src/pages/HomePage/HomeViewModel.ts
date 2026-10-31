@@ -91,6 +91,29 @@ export class HomeViewModel extends BaseViewModel {
         await cleanupRemovedRepositoryMod(id);
     }
 
+    /** Remove several mods with one Log line (names looked up in one go) */
+    public async removeMods(ids: number[]): Promise<void> {
+        if (ids.length === 0) return;
+        if (ids.length === 1) return this.removeMod(ids[0]);
+        const names = await this.modNames(ids);
+        for (const id of ids) {
+            await this.homeService.removeModFromActiveProfile(id);
+            await cleanupRemovedRepositoryMod(id);
+        }
+        await logActivity('info', t("log.list.removedMany", {count: ids.length}), nameList(names), 'list');
+    }
+
+    /** Display names of several mods in one query */
+    private async modNames(ids: number[]): Promise<string[]> {
+        try {
+            const mods = await (await StorageAPI.getMods()).getBatchCompleteModDataOptimized(ids);
+            const byId = new Map(mods.map(m => [m.modId, m.displayName || m.originalName || `#${m.modId}`]));
+            return ids.map(id => byId.get(id) ?? `#${id}`);
+        } catch {
+            return ids.map(id => `#${id}`);
+        }
+    }
+
     public async setDisplayName(id: number, name: string): Promise<void> {
         const before = await this.modName(id);
         await this.homeService.updateModDisplayName(id, name);
@@ -114,8 +137,10 @@ export class HomeViewModel extends BaseViewModel {
     public async batchSetModEnabled(modIds: number[], enable: boolean, log = true): Promise<void> {
         await this.homeService.batchSetModEnabled(modIds, enable);
         if (!log || modIds.length === 0) return;
-        const names = await Promise.all(modIds.map(id => this.modName(id)));
-        await logActivity('info', t(enable ? "log.list.enabledMany" : "log.list.disabledMany", {count: modIds.length}), nameList(names), 'list');
+        // The Log line in the background: the list shouldn't wait for the name lookup
+        void this.modNames(modIds)
+            .then(names => logActivity('info', t(enable ? "log.list.enabledMany" : "log.list.disabledMany", {count: modIds.length}), nameList(names), 'list'))
+            .catch(() => undefined);
     }
 
     public async setModUsedVersion(profileModId: number, version: string): Promise<void> {
@@ -124,9 +149,10 @@ export class HomeViewModel extends BaseViewModel {
 
     public async setGroupName(id: number, name: string): Promise<void> {
         const treeViewModel = await IoC.get(TreeViewModel);
-        const before = treeViewModel.getGroupName(id);
+        // the old name, before it changes
+        const before = await treeViewModel.getGroupName(id).catch(() => undefined);
         await treeViewModel.setGroupName(id, name);
-        await logActivity('info', t("log.list.folderRenamed", {from: (await before) ?? "", to: name}), undefined, 'list');
+        await logActivity('info', t("log.list.folderRenamed", {from: before ?? "", to: name}), undefined, 'list');
     }
 
     public async getGroupName(id: number): Promise<string | undefined> {

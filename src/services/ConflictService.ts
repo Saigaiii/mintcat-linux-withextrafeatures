@@ -21,6 +21,12 @@ export interface ConflictInfo {
     fileHashes: Record<string, string>;
     /** All files in the mod (0 if unknown) */
     totalFiles: number;
+    /** The mod's files no other mod has (always used); may be cut short for huge mods */
+    otherFiles: string[];
+    /** Conflicting files the game itself doesn't have (added by mods); see gameChecked */
+    newFiles: string[];
+    /** The game's own file list was read, so newFiles is meaningful */
+    gameChecked: boolean;
 }
 
 /**
@@ -32,6 +38,48 @@ export interface ModConflictResponse {
     conflicting_files: string[];
     file_hashes?: Record<string, string>;
     total_files?: number;
+    other_files?: string[];
+    new_files?: string[];
+    game_checked?: boolean;
+}
+
+/** What one mod changes in one asset compared to the game (backend: ModAssetChanges) */
+export interface ModAssetChanges {
+    found: boolean;
+    error?: string;
+    changed: number;
+    kinds: Record<string, number>;
+    examples: string[];
+    shallow?: boolean;
+}
+
+/** How two mods' versions of one asset relate (backend: AssetPairChanges) */
+export interface AssetPairChanges {
+    a: number;
+    b: number;
+    same: number;
+    clash: number;
+    onlyA: number;
+    onlyB: number;
+    onlyAValues: boolean;
+    onlyBValues: boolean;
+    clashExamples: string[];
+}
+
+/** Part-by-part comparison of one shared asset (backend: ConflictAssetSummary) */
+export interface ConflictAssetSummary {
+    assetPath: string;
+    inGame: boolean;
+    gameError?: string;
+    mods: Record<string, ModAssetChanges>;
+    pairs: AssetPairChanges[];
+}
+
+/** What's needed to compare an asset in detail later (see ConflictDetails' diff view) */
+export interface ConflictDiffContext {
+    gameName?: string;
+    gamePakPath?: string;
+    mods: { mod_id: number; cache_path: string; is_unpacked: boolean }[];
 }
 
 // Module-level state storage for conflict information
@@ -54,6 +102,8 @@ export interface ConflictModMeta {
 }
 
 const modMetaMap = new Map<number, ConflictModMeta>();
+const assetSummaries = new Map<string, ConflictAssetSummary>();
+let diffContext: ConflictDiffContext | null = null;
 
 /**
  * How much a conflict matters:
@@ -82,21 +132,49 @@ export interface ConflictPair {
     orderUncertain: boolean;
     /** Worst rating among the shared assets */
     rating: ConflictRating;
+    /** Number of shared files (not assets) */
+    fileCount: number;
 }
 
 export interface ConflictAsset {
     /** Path without the extension, minus the "fsd/content/" prefix */
     path: string;
+    /** Full normalized path without the extension (key of the part-by-part comparison) */
+    base: string;
     extensions: string[];
     rating: ConflictRating;
+    /** What the loser loses in this asset (see AssetOutcome) */
+    outcome: AssetOutcome;
+    /** The game doesn't have this file: mods added it (e.g. a shared library) */
+    newFile: boolean;
+    /** Parts only the loser changes (lost), parts both change differently, parts both change the same */
+    loserOnly?: number;
+    clashes?: number;
+    sameParts?: number;
+    /** The loser's lost changes are all plain values (settings), not code */
+    loserValuesOnly?: boolean;
+    /** Names of a few clashing parts ("kind|owner|name") */
+    clashExamples?: string[];
 }
+
+/**
+ * What happens to the losing mod's version of one shared asset:
+ *  - identical: the files are byte-for-byte the same
+ *  - sameChanges: the winner's version has every change the loser makes (nothing is lost)
+ *  - separate: they change different parts; the loser's changes are lost but don't clash
+ *    with the winner's (both could work if the file were combined)
+ *  - clash: both change the same parts differently
+ *  - unknown: not compared part by part (not an asset, couldn't be read, or not checked)
+ */
+export type AssetOutcome = 'identical' | 'sameChanges' | 'separate' | 'clash' | 'unknown';
 
 /** Overall state of one mod's conflicts, from that mod's side */
 export type ModConflictSummary =
-    | 'noEffect'       // every file it has is replaced by mods above it
+    | 'noEffect'       // every file it has is replaced by mods above it, and something is lost
+    | 'redundant'      // every file is replaced, but the mods above do exactly what it does
     | 'losesGameplay'  // a mod above it replaces some of its gameplay files
     | 'losesCosmetic'  // a mod above it replaces only some of its looks/sounds
-    | 'harmless'       // it only shares identical files
+    | 'harmless'       // it only shares identical files (or files with the same changes)
     | 'winsAll';       // it's above every mod it shares files with
 
 // Unreal / DRG naming conventions for assets that only affect looks or sound
@@ -142,16 +220,37 @@ function displayAssetPath(base: string): string {
     return base.replace(/^(fsd|roguecore)\/content\//, '');
 }
 
+/** Files that make up assets the backend can compare part by part */
+function isComparableAsset(extensions: string[]): boolean {
+    return extensions.includes('.uasset') || extensions.includes('.umap');
+}
+
+/**
+ * What the loser loses in one asset, from the part-by-part comparison (if there is one)
+ */
+function assetOutcome(base: string, winnerId: number, loserId: number, allIdentical: boolean):
+    Pick<ConflictAsset, 'outcome' | 'loserOnly' | 'clashes' | 'sameParts' | 'loserValuesOnly' | 'clashExamples'> {
+    if (allIdentical) return {outcome: 'identical'};
+    const summary = assetSummaries.get(base);
+    const pair = summary?.pairs.find(p => (p.a === winnerId && p.b === loserId) || (p.a === loserId && p.b === winnerId));
+    if (!summary || !pair) return {outcome: 'unknown'};
+    const loserIsA = pair.a === loserId;
+    const loserOnly = loserIsA ? pair.onlyA : pair.onlyB;
+    const loserValuesOnly = loserIsA ? pair.onlyAValues : pair.onlyBValues;
+    const outcome: AssetOutcome = pair.clash > 0 ? 'clash' : loserOnly > 0 ? 'separate' : 'sameChanges';
+    return {outcome, loserOnly, clashes: pair.clash, sameParts: pair.same, loserValuesOnly, clashExamples: pair.clashExamples};
+}
+
 /**
  * Group shared files into assets and rate each one.
  * @param identical files whose content is the same in both mods
  */
-function groupFilesByAsset(files: string[], identical?: Set<string>): ConflictAsset[] {
-    const groups = new Map<string, { exts: Set<string>; files: string[] }>();
+function groupFilesByAsset(files: string[], identical: Set<string> | undefined, winnerId: number, loserId: number, newFiles: Set<string>): ConflictAsset[] {
+    const groups = new Map<string, { exts: Set<string>; files: string[]; base: string }>();
     for (const file of files) {
         const {base, ext} = splitAsset(file);
         const display = displayAssetPath(base);
-        if (!groups.has(display)) groups.set(display, {exts: new Set(), files: []});
+        if (!groups.has(display)) groups.set(display, {exts: new Set(), files: [], base});
         const group = groups.get(display)!;
         if (ext) group.exts.add(ext);
         group.files.push(file);
@@ -160,8 +259,13 @@ function groupFilesByAsset(files: string[], identical?: Set<string>): ConflictAs
         .map(([path, group]) => {
             const extensions = Array.from(group.exts).sort();
             const allIdentical = !!identical && group.files.every(f => identical.has(f));
-            const rating: ConflictRating = allIdentical ? 'harmless' : classifyAsset(path, extensions);
-            return {path, extensions, rating};
+            const result = assetOutcome(group.base, winnerId, loserId, allIdentical);
+            const nothingLost = result.outcome === 'identical' || result.outcome === 'sameChanges';
+            const rating: ConflictRating = nothingLost ? 'harmless' : classifyAsset(path, extensions);
+            return {
+                path, base: group.base, extensions, rating, ...result,
+                newFile: group.files.every(f => newFiles.has(f)),
+            };
         })
         .sort((a, b) => RATING_RANK[b.rating] - RATING_RANK[a.rating] || a.path.localeCompare(b.path));
 }
@@ -178,6 +282,7 @@ export class ConflictService {
         const previousModIds = Array.from(conflictMap.keys());
         // Clear existing conflicts
         conflictMap.clear();
+        assetSummaries.clear();
         if (meta) {
             modMetaMap.clear();
             meta.forEach((value, key) => modMetaMap.set(key, value));
@@ -191,6 +296,9 @@ export class ConflictService {
                 conflictingFiles: conflict.conflicting_files,
                 fileHashes: conflict.file_hashes ?? {},
                 totalFiles: conflict.total_files ?? 0,
+                otherFiles: conflict.other_files ?? [],
+                newFiles: conflict.new_files ?? [],
+                gameChecked: conflict.game_checked === true,
             };
             conflictMap.set(info.modId, info);
         }
@@ -306,13 +414,15 @@ export class ConflictService {
             const hashesA = conflictMap.get(a)?.fileHashes ?? {};
             const hashesB = conflictMap.get(b)?.fileHashes ?? {};
             const identical = new Set(files.filter(f => hashesA[f] && hashesA[f] === hashesB[f]));
-            const assets = groupFilesByAsset(files, identical);
+            const newFiles = new Set([...(conflictMap.get(a)?.newFiles ?? []), ...(conflictMap.get(b)?.newFiles ?? [])]);
+            const assets = groupFilesByAsset(files, identical, winnerId, loserId, newFiles);
             pairs.push({
                 winnerId,
                 loserId,
                 assets,
                 orderUncertain: this.isAudioOnly(a) || this.isAudioOnly(b),
                 rating: assets.reduce<ConflictRating>((r, asset) => worseRating(r, asset.rating), 'harmless'),
+                fileCount: files.length,
             });
         }
         // Worth-worrying-about first, then by list position
@@ -341,7 +451,11 @@ export class ConflictService {
 
     /** One-word state of a mod's conflicts, from its own side */
     static summarize(modId: number, order: number[]): ModConflictSummary {
-        if (this.hasNoEffect(modId, order)) return 'noEffect';
+        if (this.hasNoEffect(modId, order)) {
+            // Replaced entirely, but if every mod above does exactly what it does, nothing is lost
+            const losing = this.getPairs(order, modId).filter(p => p.loserId === modId && !p.orderUncertain);
+            return losing.length > 0 && losing.every(p => p.rating === 'harmless') ? 'redundant' : 'noEffect';
+        }
         let worst: ConflictRating | null = null;
         let anyShared = false;
         for (const pair of this.getPairs(order, modId)) {
@@ -355,12 +469,70 @@ export class ConflictService {
         return anyShared ? 'winsAll' : 'harmless';
     }
 
+    /** Part-by-part comparisons of the shared assets (from the last check) */
+    static setAssetSummaries(summaries: ConflictAssetSummary[]): void {
+        assetSummaries.clear();
+        for (const summary of summaries) assetSummaries.set(summary.assetPath, summary);
+        bumpConflictVersion();
+    }
+
+    static getAssetSummary(base: string): ConflictAssetSummary | null {
+        return assetSummaries.get(base) ?? null;
+    }
+
+    static hasAssetSummaries(): boolean {
+        return assetSummaries.size > 0;
+    }
+
+    /** The game's own files could be read in the last check (else mods are only compared with each other) */
+    static gameWasRead(): boolean {
+        return Array.from(conflictMap.values()).some(info => info.gameChecked);
+    }
+
+    static setDiffContext(context: ConflictDiffContext | null): void {
+        diffContext = context;
+    }
+
+    static getDiffContext(): ConflictDiffContext | null {
+        return diffContext;
+    }
+
+    /** Everything the last check found about a mod (for the report) */
+    static getInfo(modId: number): ConflictInfo | null {
+        return conflictMap.get(modId) ?? null;
+    }
+
+    /**
+     * Drop a mod from the results (it was turned off or removed), so the list and the report
+     * update right away instead of waiting for the next check
+     */
+    static forgetMod(modId: number): void {
+        if (!conflictMap.has(modId)) return;
+        conflictMap.delete(modId);
+        const index = this.buildFileIndex();
+        for (const info of conflictMap.values()) {
+            info.conflictingMods = info.conflictingMods.filter(id => id !== modId);
+            info.conflictingFiles = info.conflictingFiles.filter(f => (index.get(f)?.length ?? 0) > 1);
+        }
+        const gone = [modId];
+        for (const [id, info] of Array.from(conflictMap.entries())) {
+            if (info.conflictingMods.length === 0 || info.conflictingFiles.length === 0) {
+                conflictMap.delete(id);
+                gone.push(id);
+            }
+        }
+        bumpConflictVersion();
+        this.emitUpdateEvents();
+        for (const id of gone) emitEvent('mod-conflict-update', {modId: id, hasConflict: false});
+    }
+
     /**
      * Clear all conflict data
      */
     static clearAll(): void {
         const previousModIds = Array.from(conflictMap.keys());
         conflictMap.clear();
+        assetSummaries.clear();
         bumpConflictVersion();
         
         // Emit update events for previously conflicting mods

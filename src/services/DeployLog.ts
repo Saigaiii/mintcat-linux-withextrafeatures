@@ -13,7 +13,10 @@ export interface DeployedMod {
 export interface DeployRecord {
     /** ms since 1970 */
     time: number;
+    /** Name of the profile when it was deployed (for the Log) */
     profile: string;
+    /** Id of that profile (names can change); missing in records from older versions */
+    profileId?: number;
     /** In install order (none after an uninstall) */
     mods: DeployedMod[];
     /** The mods were uninstalled from the game at `time` */

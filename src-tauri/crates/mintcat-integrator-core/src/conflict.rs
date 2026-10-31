@@ -1,10 +1,15 @@
+use crate::asset_diff;
 use anyhow::Context;
-use mintcat_integrator_api::{ConflictCheckModInfo, ModConflict};
-use std::collections::HashMap;
+use mintcat_integrator_api::{
+    AssetVersionInfo, ConflictAssetDiff, ConflictAssetDiffRequest, ConflictAssetSummary,
+    ConflictAssetsSummaryRequest, ConflictCheckModInfo, ModAssetChanges, ModConflict,
+};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
+use unreal_asset::engine_version::EngineVersion;
 use walkdir::WalkDir;
 
 /// Where a mod's file can be read from (to fingerprint it when it conflicts)
@@ -70,17 +75,22 @@ fn is_zip(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// The paks in a zip (any folder), read into memory one at a time by the caller
+/// The pak in a zip that gets installed: like the installer (see common::zip), the first
+/// entry in the zip's order whose extension is exactly "pak". Other paks in the zip (variants,
+/// options) aren't installed, so they can't conflict.
 fn zip_pak_names(zip_path: &Path) -> anyhow::Result<Vec<String>> {
     let file = fs::File::open(zip_path)
         .with_context(|| format!("Failed to open zip: {}", zip_path.display()))?;
-    let archive = zip::ZipArchive::new(BufReader::new(file))
+    let mut archive = zip::ZipArchive::new(BufReader::new(file))
         .with_context(|| format!("Failed to read zip: {}", zip_path.display()))?;
-    Ok(archive
-        .file_names()
-        .filter(|n| n.to_lowercase().ends_with(".pak"))
-        .map(|n| n.to_string())
-        .collect())
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index_raw(i) else { continue };
+        let name = entry.name().to_string();
+        if Path::new(&name).extension().is_some_and(|ext| ext == "pak") {
+            return Ok(vec![name]);
+        }
+    }
+    Ok(Vec::new())
 }
 
 fn read_zip_entry(zip_path: &Path, name: &str) -> anyhow::Result<Vec<u8>> {
@@ -88,7 +98,8 @@ fn read_zip_entry(zip_path: &Path, name: &str) -> anyhow::Result<Vec<u8>> {
         .with_context(|| format!("Failed to open zip: {}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(BufReader::new(file))?;
     let mut entry = archive.by_name(name)?;
-    let mut data = Vec::with_capacity(entry.size() as usize);
+    // The size comes from the zip's header: don't trust it for more than a first guess
+    let mut data = Vec::with_capacity((entry.size() as usize).min(64 * 1024 * 1024));
     entry.read_to_end(&mut data)?;
     Ok(data)
 }
@@ -203,42 +214,265 @@ fn fingerprint(data: &[u8]) -> String {
 
 /// Fingerprint the given (conflicting) files of one mod, opening each pak once.
 fn fingerprint_files(files: &[(&String, &FileSource)]) -> HashMap<String, String> {
+    read_sources(files)
+        .into_iter()
+        .map(|(path, data)| (path, fingerprint(&data)))
+        .collect()
+}
+
+/// Every file of a mod (normalized path, where to read it)
+fn list_mod_files(mod_info: &ConflictCheckModInfo, content_prefix: &str) -> anyhow::Result<ModFiles> {
+    if mod_info.is_unpacked {
+        get_directory_mod_pak_files(&mod_info.cache_path, content_prefix)
+    } else if is_zip(Path::new(&mod_info.cache_path)) {
+        // mod.io downloads: these were skipped before (read as a pak, which failed), so
+        // conflicts between mod.io mods never showed
+        get_zip_files(&mod_info.cache_path)
+    } else {
+        get_pak_files(&mod_info.cache_path)
+    }
+}
+
+/// Read the given files from wherever they are (paks are opened once each)
+fn read_sources(files: &[(&String, &FileSource)]) -> HashMap<String, Vec<u8>> {
     let mut out = HashMap::new();
     let mut by_pak: HashMap<&PathBuf, Vec<(&String, &String)>> = HashMap::new();
     let mut by_zip_pak: HashMap<(&PathBuf, &String), Vec<(&String, &String)>> = HashMap::new();
-
     for (path, source) in files {
         match source {
             FileSource::Disk(disk) => {
                 if let Ok(data) = fs::read(disk) {
-                    out.insert((*path).clone(), fingerprint(&data));
+                    out.insert((*path).clone(), data);
                 }
             }
             FileSource::Pak { pak, entry } => by_pak.entry(pak).or_default().push((path, entry)),
             FileSource::ZipPak { zip, pak, entry } => by_zip_pak.entry((zip, pak)).or_default().push((path, entry)),
         }
     }
-
     for ((zip_path, pak_name), entries) in by_zip_pak {
         let Ok(data) = read_zip_entry(zip_path, pak_name) else { continue };
         let mut cursor = Cursor::new(data.as_slice());
         let Ok(pak) = repak::PakBuilder::new().reader(&mut cursor) else { continue };
         for (path, entry) in entries {
             if let Ok(bytes) = pak.get(entry, &mut cursor) {
-                out.insert(path.clone(), fingerprint(&bytes));
+                out.insert(path.clone(), bytes);
             }
         }
     }
-
     for (pak_path, entries) in by_pak {
         let Ok((pak, mut reader)) = open_pak(pak_path) else { continue };
         for (path, entry) in entries {
             if let Ok(data) = pak.get(entry, &mut reader) {
-                out.insert(path.clone(), fingerprint(&data));
+                out.insert(path.clone(), data);
             }
         }
     }
     out
+}
+
+/// The game's own pak index (normalized path -> entry). Read per request, not kept: the
+/// backend library may be unloaded between calls, and a cache in it would leak.
+struct GameIndex {
+    path: PathBuf,
+    pak: repak::PakReader,
+    entries: HashMap<String, String>,
+}
+
+fn game_index(pak_path: &str) -> Option<GameIndex> {
+    if pak_path.trim().is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(pak_path);
+    if !path.is_file() {
+        return None;
+    }
+    let (pak, _reader) = match open_pak(&path) {
+        Ok(opened) => opened,
+        Err(error) => {
+            eprintln!("Couldn't read the game's pak for the conflict check: {:#}", error);
+            return None;
+        }
+    };
+    let mount = pak.mount_point().to_string();
+    let entries = pak
+        .files()
+        .into_iter()
+        .map(|entry| (normalize_pak_entry(&mount, &entry), entry))
+        .collect();
+    Some(GameIndex { path, pak, entries })
+}
+
+fn read_game_files(index: &GameIndex, wanted: &[String]) -> HashMap<String, Vec<u8>> {
+    let mut out = HashMap::new();
+    let Ok(file) = fs::File::open(&index.path) else { return out };
+    let mut reader = BufReader::new(file);
+    for path in wanted {
+        if let Some(entry) = index.entries.get(path) {
+            if let Ok(data) = index.pak.get(entry, &mut reader) {
+                out.insert(path.clone(), data);
+            }
+        }
+    }
+    out
+}
+
+/// Extensions of the files that make up one asset
+const ASSET_PART_EXTENSIONS: [&str; 5] = [".uasset", ".uexp", ".umap", ".ubulk", ".uptnl"];
+
+fn files_of_asset(base: &str) -> Vec<String> {
+    ASSET_PART_EXTENSIONS.iter().map(|ext| format!("{base}{ext}")).collect()
+}
+
+/// The files of one asset (by extension) out of a set of files read by path
+fn asset_input(base: &str, files: &HashMap<String, Vec<u8>>) -> asset_diff::VersionInput {
+    asset_diff::VersionInput {
+        files: ASSET_PART_EXTENSIONS
+            .iter()
+            .filter_map(|ext| files.get(&format!("{base}{ext}")).map(|d| (ext.to_string(), d.clone())))
+            .collect(),
+    }
+}
+
+fn version_info(v: &asset_diff::VersionParts) -> AssetVersionInfo {
+    AssetVersionInfo {
+        found: v.file_hash.is_some(),
+        error: v.error.clone(),
+        parts: v.parts.as_ref().map_or(0, |p| p.len()),
+        file_hash: v.file_hash.clone(),
+        shallow: v.shallow,
+    }
+}
+
+/// Read the given assets' files from each mod (each mod opened once) and from the game
+struct AssetSources {
+    mods: HashMap<i64, HashMap<String, Vec<u8>>>,
+    game: Option<HashMap<String, Vec<u8>>>,
+}
+
+fn read_asset_sources(
+    mods: &[ConflictCheckModInfo],
+    assets: &[(String, Vec<i64>)],
+    content_prefix: &str,
+    game_pak_path: Option<&str>,
+) -> AssetSources {
+    let mut mod_files = HashMap::new();
+    for mod_info in mods {
+        let wanted: HashSet<String> = assets
+            .iter()
+            .filter(|(_, ids)| ids.contains(&mod_info.mod_id))
+            .flat_map(|(base, _)| files_of_asset(base))
+            .collect();
+        if wanted.is_empty() {
+            continue;
+        }
+        let files = list_mod_files(mod_info, content_prefix)
+            .map(|files| {
+                let picked: Vec<(&String, &FileSource)> =
+                    files.iter().filter(|(p, _)| wanted.contains(p)).map(|(p, s)| (p, s)).collect();
+                read_sources(&picked)
+            })
+            .unwrap_or_default();
+        mod_files.insert(mod_info.mod_id, files);
+    }
+    let game = game_pak_path.and_then(game_index).map(|index| {
+        let wanted: Vec<String> = assets.iter().flat_map(|(base, _)| files_of_asset(base)).collect();
+        read_game_files(&index, &wanted)
+    });
+    AssetSources { mods: mod_files, game }
+}
+
+/// Every version of one asset, read the same way so their parts can be compared:
+/// (the game's, if the game was read), and each mod's
+fn read_asset_versions(
+    sources: &AssetSources,
+    base: &str,
+    ids: &[i64],
+) -> (Option<asset_diff::VersionParts>, Vec<(i64, asset_diff::VersionParts)>) {
+    let version = EngineVersion::VER_UE4_27;
+    let empty = HashMap::new();
+    let game_input = sources.game.as_ref().map(|files| asset_input(base, files));
+    let mod_inputs: Vec<asset_diff::VersionInput> =
+        ids.iter().map(|id| asset_input(base, sources.mods.get(id).unwrap_or(&empty))).collect();
+    let mut inputs: Vec<&asset_diff::VersionInput> = Vec::new();
+    if let Some(game) = &game_input {
+        inputs.push(game);
+    }
+    inputs.extend(mod_inputs.iter());
+    let mut read = asset_diff::read_versions(&inputs, version).into_iter();
+    let game = game_input.as_ref().and_then(|_| read.next());
+    let mods = ids.iter().copied().zip(read).collect();
+    (game, mods)
+}
+
+/// Compare one shared asset across the given mods and the game's original, part by part
+pub fn conflict_asset_diff(request: ConflictAssetDiffRequest) -> anyhow::Result<ConflictAssetDiff> {
+    let content_prefix = content_prefix_for_game(request.game_name.as_deref());
+    let base = request.asset_path.trim().to_lowercase();
+    let ids: Vec<i64> = request.mods.iter().map(|m| m.mod_id).collect();
+    let assets = vec![(base.clone(), ids.clone())];
+    let sources = read_asset_sources(&request.mods, &assets, content_prefix, request.game_pak_path.as_deref());
+    let (game, versions) = read_asset_versions(&sources, &base, &ids);
+
+    let mut result = ConflictAssetDiff { asset_path: base.clone(), ..Default::default() };
+    if let Some(game) = &game {
+        result.game = version_info(game);
+    }
+    for (id, v) in &versions {
+        result.mods.insert(*id, version_info(v));
+    }
+    let game_parts = game.as_ref().filter(|g| g.file_hash.is_some()).and_then(|g| g.parts.as_ref());
+    let mod_parts: Vec<(i64, Option<&asset_diff::PartMap>)> =
+        versions.iter().map(|(id, v)| (*id, v.parts.as_ref())).collect();
+    result.rows = asset_diff::diff_rows(game_parts, &mod_parts);
+    Ok(result)
+}
+
+/// For many shared assets at once: what each mod changes compared to the game, and how
+/// each pair of mods sharing an asset relates. Each mod and the game are opened once.
+pub fn conflict_assets_summary(request: ConflictAssetsSummaryRequest) -> anyhow::Result<Vec<ConflictAssetSummary>> {
+    let content_prefix = content_prefix_for_game(request.game_name.as_deref());
+    let assets: Vec<(String, Vec<i64>)> = request
+        .assets
+        .iter()
+        .map(|a| (a.asset_path.trim().to_lowercase(), a.mod_ids.clone()))
+        .collect();
+    let timing = std::env::var_os("MINTCAT_CONFLICT_TIMING").is_some();
+    let started = std::time::Instant::now();
+    let sources = read_asset_sources(&request.mods, &assets, content_prefix, request.game_pak_path.as_deref());
+    if timing {
+        eprintln!("  files read at {:?}", started.elapsed());
+    }
+
+    let mut out = Vec::new();
+    for (base, ids) in &assets {
+        let one = std::time::Instant::now();
+        let (game, versions) = read_asset_versions(&sources, base, ids);
+        let in_game = game.as_ref().is_some_and(|g| g.file_hash.is_some());
+        let game_parts = game.as_ref().filter(|_| in_game).and_then(|g| g.parts.as_ref());
+        let parts: Vec<(i64, Option<&asset_diff::PartMap>)> =
+            versions.iter().map(|(id, v)| (*id, v.parts.as_ref())).collect();
+        let (mut mods, pairs) = asset_diff::summarize(game_parts, &parts);
+        for (id, v) in &versions {
+            let entry = mods.entry(*id).or_insert_with(ModAssetChanges::default);
+            entry.found = v.file_hash.is_some();
+            entry.error = v.error.clone();
+            entry.shallow = v.shallow;
+        }
+        if timing && one.elapsed().as_millis() > 200 {
+            eprintln!("  slow: {base} {:?}", one.elapsed());
+        }
+        out.push(ConflictAssetSummary {
+            asset_path: base.clone(),
+            in_game,
+            game_error: game.as_ref().and_then(|g| g.error.clone()),
+            mods,
+            pairs,
+        });
+    }
+    if timing {
+        eprintln!("  compared at {:?}", started.elapsed());
+    }
+    Ok(out)
 }
 
 pub fn check_mod_conflicts_from_json(
@@ -251,6 +485,32 @@ pub fn check_mod_conflicts_from_json(
     Ok(check_mod_conflicts(&mods, game_name))
 }
 
+/// Same as [check_mod_conflicts], also telling which shared files the game itself has
+pub fn check_mod_conflicts_with_game(
+    mod_list_json: &str,
+    game_name: Option<&str>,
+    game_pak_path: Option<&str>,
+) -> Result<Vec<ModConflict>, String> {
+    let mods: Vec<ConflictCheckModInfo> = serde_json::from_str(mod_list_json)
+        .map_err(|_| "backend.error.parse_mod_list".to_string())?;
+    let mut conflicts = check_mod_conflicts(&mods, game_name);
+    if let Some(index) = game_pak_path.and_then(game_index) {
+        for conflict in &mut conflicts {
+            conflict.new_files = conflict
+                .conflicting_files
+                .iter()
+                .filter(|f| !index.entries.contains_key(*f))
+                .cloned()
+                .collect();
+            conflict.game_checked = true;
+        }
+    }
+    Ok(conflicts)
+}
+
+/// How many of a mod's own (unshared) files are listed, to keep the answer small
+const OTHER_FILES_LIMIT: usize = 3000;
+
 pub fn check_mod_conflicts(
     mods: &[ConflictCheckModInfo],
     game_name: Option<&str>,
@@ -261,15 +521,7 @@ pub fn check_mod_conflicts(
     let mut sources: HashMap<i64, HashMap<String, FileSource>> = HashMap::new();
 
     for mod_info in mods {
-        let files = if mod_info.is_unpacked {
-            get_directory_mod_pak_files(&mod_info.cache_path, content_prefix)
-        } else if is_zip(Path::new(&mod_info.cache_path)) {
-            // mod.io downloads: these were skipped before (read as a pak, which failed), so
-            // conflicts between mod.io mods never showed
-            get_zip_files(&mod_info.cache_path)
-        } else {
-            get_pak_files(&mod_info.cache_path)
-        };
+        let files = list_mod_files(mod_info, content_prefix);
 
         match files {
             Ok(file_list) => {
@@ -332,12 +584,22 @@ pub fn check_mod_conflicts(
                 })
                 .unwrap_or_default();
             let total_files = sources.get(&mod_id).map_or(0, |m| m.len());
+            let shared: HashSet<&String> = conflicting_files.iter().collect();
+            let mut other_files: Vec<String> = sources
+                .get(&mod_id)
+                .map(|m| m.keys().filter(|f| !shared.contains(f)).cloned().collect())
+                .unwrap_or_default();
+            other_files.sort();
+            other_files.truncate(OTHER_FILES_LIMIT);
             ModConflict {
                 mod_id,
                 conflicting_mods,
                 conflicting_files,
                 file_hashes,
                 total_files,
+                other_files,
+                new_files: Vec::new(),
+                game_checked: false,
             }
         })
         .collect()
@@ -502,6 +764,70 @@ mod tests {
         assert_eq!(h(1, "fsd/content/ui/icon_stasis.uasset"), h(2, "fsd/content/ui/icon_stasis.uasset"));
         assert_ne!(h(1, "fsd/content/ui/icon_snow.uasset"), h(2, "fsd/content/ui/icon_snow.uasset"));
         assert_eq!(h(2, "fsd/content/ui/icon_sticky.uasset"), h(3, "fsd/content/ui/icon_sticky.uasset"));
+    }
+
+    #[test]
+    fn only_the_installed_pak_of_a_zip_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let option_a = dir.path().join("a.pak");
+        let option_b = dir.path().join("b.pak");
+        let other = dir.path().join("other.pak");
+        write_pak_with(&option_a, &[("FSD/Content/UI/A.uasset", b"a")]);
+        write_pak_with(&option_b, &[("FSD/Content/UI/B.uasset", b"b")]);
+        write_pak_with(&other, &[("FSD/Content/UI/B.uasset", b"b2"), ("FSD/Content/UI/A.uasset", b"a2")]);
+        let zip = dir.path().join("modio-9-options.zip");
+        // the installer takes the first ".pak" in the zip; ".PAK" isn't picked up at all
+        write_zip_with_paks(&zip, &[("Option A/a.pak", &option_a), ("Option B/b.pak", &option_b)]);
+        let result = check_mod_conflicts(&[info(1, &zip), info(2, &other)], None);
+        let one = result.iter().find(|m| m.mod_id == 1).unwrap();
+        assert_eq!(one.conflicting_files, vec!["fsd/content/ui/a.uasset"]);
+        assert_eq!(one.total_files, 1);
+        let two = result.iter().find(|m| m.mod_id == 2).unwrap();
+        assert_eq!(two.other_files, vec!["fsd/content/ui/b.uasset"]);
+    }
+
+    #[test]
+    fn shared_files_the_game_lacks_are_listed_as_new() {
+        let dir = tempfile::tempdir().unwrap();
+        let game = dir.path().join("FSD-WindowsNoEditor.pak");
+        write_pak_with(&game, &[("FSD/Content/WeaponsNTools/Gun.uasset", b"game gun")]);
+        let a = dir.path().join("a.pak");
+        let b = dir.path().join("b.pak");
+        write_pak_with(&a, &[("FSD/Content/WeaponsNTools/Gun.uasset", b"gun a"), ("FSD/Content/_Lib/Helper.uasset", b"lib")]);
+        write_pak_with(&b, &[("FSD/Content/WeaponsNTools/Gun.uasset", b"gun b"), ("FSD/Content/_Lib/Helper.uasset", b"lib")]);
+        let list = serde_json::to_string(&[info(1, &a), info(2, &b)]).unwrap();
+        let result = check_mod_conflicts_with_game(&list, None, game.to_str()).unwrap();
+        for conflict in &result {
+            assert!(conflict.game_checked);
+            assert_eq!(conflict.new_files, vec!["fsd/content/_lib/helper.uasset"]);
+        }
+        // Without the game: nothing is claimed
+        let result = check_mod_conflicts_with_game(&list, None, Some("/nonexistent/x.pak")).unwrap();
+        assert!(result.iter().all(|c| !c.game_checked && c.new_files.is_empty()));
+
+        // Comparing the shared assets doesn't fail on files that aren't real assets
+        let summary = conflict_assets_summary(mintcat_integrator_api::ConflictAssetsSummaryRequest {
+            game_name: None,
+            game_pak_path: game.to_str().map(String::from),
+            mods: vec![info(1, &a), info(2, &b)],
+            assets: vec![mintcat_integrator_api::SharedAssetRef {
+                asset_path: "fsd/content/weaponsntools/gun".into(),
+                mod_ids: vec![1, 2],
+            }],
+        })
+        .unwrap();
+        assert_eq!(summary.len(), 1);
+        assert!(summary[0].in_game);
+        assert!(summary[0].mods.values().all(|m| m.found && m.error.is_some()));
+        let diff = conflict_asset_diff(mintcat_integrator_api::ConflictAssetDiffRequest {
+            game_name: None,
+            game_pak_path: game.to_str().map(String::from),
+            asset_path: "FSD/Content/WeaponsNTools/Gun".into(),
+            mods: vec![info(1, &a), info(2, &b)],
+        })
+        .unwrap();
+        assert!(diff.game.found);
+        assert_ne!(diff.mods[&1].file_hash, diff.mods[&2].file_hash);
     }
 
     #[test]
