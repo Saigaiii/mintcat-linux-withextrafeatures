@@ -4,7 +4,7 @@ import i18next, {t} from "i18next";
 import {open as openFileDialog, save} from "@tauri-apps/plugin-dialog";
 import {copyFile, exists} from "@tauri-apps/plugin-fs";
 import {
-    Button, Checkbox, Divider, Dropdown,
+    Alert, Button, Checkbox, Divider, Dropdown,
     Flex, MenuProps, message, Select,
     SelectProps, Space, Spin, Tooltip, TreeProps, Typography,
 } from 'antd';
@@ -14,7 +14,7 @@ import {
     EditOutlined, FieldTimeOutlined, LoadingOutlined, MinusSquareOutlined, PauseCircleOutlined, PlayCircleOutlined,
     PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined, ImportOutlined,
     UnorderedListOutlined, WarningOutlined, FolderOutlined, ColumnHeightOutlined, VerticalAlignMiddleOutlined,
-    StopOutlined, WarningFilled,
+    StopOutlined, WarningFilled, AimOutlined, BgColorsOutlined, DownOutlined, UndoOutlined,
     CheckCircleFilled, CloudUploadOutlined
 } from "@ant-design/icons";
 import * as checkbox from "antd/es/checkbox";
@@ -48,6 +48,7 @@ import {ModSourceType} from "@/models/mod/types";
 import {MODCAT_PLATFORM} from "@/apis/modcat";
 import {NEXUSMODS_PLATFORM} from "@/apis/nexusmods";
 import {TreeView} from "./TreeView.tsx";
+import {findNode, folderKeysInOrder, modsWithin, pickedFolders, topmost, withSubfolders} from "./FolderOps";
 import {AppInitializer} from "@/core/AppInitializer";
 import {IoC} from "@/core/IoC.ts";
 import { taskQueueAPI } from "tauri-plugin-task-queue";
@@ -108,6 +109,8 @@ interface ModListPageState {
     deployState?: DeployState;
     /** The profile whose mods the game has, when it isn't the active one */
     deployedOtherProfile?: string;
+    /** "Only these folders on" is in effect: which folders, since when (the banner offers the way back) */
+    solo?: { folders: string[]; time: number } | null;
     /** Deploying from the toolbar right now */
     deploying?: boolean;
     /** The game's last deploy (for the deploy button's tooltip) */
@@ -136,6 +139,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
     private unlistenFocusRecheck?: () => void;
 
     private readonly profileEditDialogRef: React.RefObject<ProfileEditDialog> = React.createRef();
+    private readonly treeViewRef = React.createRef<TreeView>();
+    /** Room the "only these folders on" banner takes above the list */
+    private static readonly SOLO_BANNER_HEIGHT = 38;
 
     private readonly inputDialogRef: React.RefObject<InputDialog> = React.createRef();
 
@@ -242,7 +248,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
             const activeName = activeProfile.displayName || activeProfile.name;
             const deployedOtherProfile = deployState === "pending" && lastDeploy && !lastDeploy.uninstalled
                 && lastDeploy.profile && lastDeploy.profile !== activeName ? lastDeploy.profile : undefined;
-            this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, lastDeploy });
+            const solo = await this.readSolo(activeProfile.id!);
+            this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, lastDeploy,
+                solo: solo ? {folders: solo.folders, time: solo.time} : null });
         } catch (e) {
             console.warn('[HomePage] refreshUnsavedState failed', e);
         }
@@ -869,37 +877,6 @@ export class HomePage extends BasePage<any, ModListPageState> {
         return keys;
     }
 
-    /** The folder's name and how many mods it and its subfolders hold in the active profile */
-    private async countModsInFolder(folderId: number): Promise<{ name: string; mods: number; modIds: number[] }> {
-        try {
-            const profiles = await StorageAPI.getProfiles();
-            const profile = await profiles.getActiveProfile();
-            const [folders, mods] = await Promise.all([
-                profiles.getProfileFolders(profile.id!),
-                profiles.getProfileMods(profile.id!),
-            ]);
-            const inside = new Set<number>([folderId]);
-            let grew = true;
-            while (grew) {
-                grew = false;
-                for (const folder of folders) {
-                    if (folder.id != null && folder.parentFolderId != null
-                        && inside.has(folder.parentFolderId) && !inside.has(folder.id)) {
-                        inside.add(folder.id);
-                        grew = true;
-                    }
-                }
-            }
-            const modIds = mods
-                .filter(m => m.parentFolderId != null && inside.has(m.parentFolderId))
-                .map(m => m.modId);
-            return {name: folders.find(f => f.id === folderId)?.name ?? "", mods: modIds.length, modIds};
-        } catch (error) {
-            console.warn("[HomePage] could not count the folder's mods", error);
-            // unknown: ask anyway
-            return {name: "", mods: 1, modIds: []};
-        }
-    }
 
     private selectionAnchor?: string;
     /** A folder being renamed: its open state is looked up under the new name */
@@ -961,9 +938,15 @@ export class HomePage extends BasePage<any, ModListPageState> {
     @autoBind
     private onTreeRowClick(nodeKey: string, e: React.MouseEvent) {
         if (e.ctrlKey || e.metaKey || e.shiftKey) {
-            this.onTreeNodeSelect([nodeKey], { node: { key: nodeKey, isLeaf: true }, nativeEvent: e.nativeEvent });
+            // a folder: its node (with the mods in it) from the list
+            const node = String(nodeKey).startsWith("folder-")
+                ? (findNode(this.state.treeData as any[], String(nodeKey)) ?? {key: nodeKey, isLeaf: false, children: []})
+                : {key: nodeKey, isLeaf: true};
+            this.onTreeNodeSelect([nodeKey], { node, nativeEvent: e.nativeEvent });
             return;
         }
+        // folders keep plain clicks to themselves
+        if (String(nodeKey).startsWith("folder-")) return;
         // A plain click selects this row (the row background stops the tree's own click, so
         // the tree never sees it); a selection of several made with Ctrl/Shift ends
         this.selectionAnchor = nodeKey;
@@ -1369,6 +1352,330 @@ export class HomePage extends BasePage<any, ModListPageState> {
         await this.updateTreeView();
     }
 
+    // ---- Several folders at once (ticked as a whole) ----------------------------------------
+
+    /** Folders ticked as a whole, in list order */
+    private pickedFolderKeys(): string[] {
+        if (!this.state.isMultiSelect) return [];
+        const raw: any = this.state.checkedKeys;
+        return pickedFolders(this.state.treeData as any[], Array.isArray(raw) ? raw : (raw?.checked ?? []));
+    }
+
+    /** What a folder's menu acts on: every ticked folder when it is one of them, else just it */
+    private folderTargets(nodeKey: string): string[] {
+        const picked = this.pickedFolderKeys();
+        const several = topmost(this.state.treeData as any[], picked).length > 1;
+        return several && picked.includes(String(nodeKey)) ? picked : [String(nodeKey)];
+    }
+
+    private folderTitle(key: string, nodes: any[] | undefined = this.state.treeData as any[]): string {
+        const walk = (list: any[] | undefined): string | null => {
+            for (const node of list ?? []) {
+                if (String(node.key) === key) return String(node.title ?? key);
+                const found = walk(node.children);
+                if (found) return found;
+            }
+            return null;
+        };
+        return walk(nodes) ?? key;
+    }
+
+    /** One folder: just it; several: them and their subfolders */
+    private expandFolders(keys: string[], open: boolean) {
+        const affected = keys.length > 1 ? withSubfolders(this.state.treeData as any[], keys) : keys;
+        const rest = (this.state.expandedKeys ?? []).map(String).filter(k => !affected.includes(k));
+        this.onTreeNodeExpand(open ? [...rest, ...affected] : rest);
+    }
+
+    private colorFolders(keys: string[]) {
+        const tree = this.state.treeData as any[];
+        ModListAppearance.openFolderColors(topmost(tree, keys).map(k => ({
+            key: TreeViewConverter.folderColorKeys[k] ?? k,
+            name: this.folderTitle(k, tree),
+        })));
+    }
+
+    /** Every mod in these folders (and their subfolders) on or off, also ones the search hides */
+    private async setFoldersEnabled(keys: string[], enable: boolean) {
+        const full = await this.treeViewRef.current?.fullTree();
+        if (!full) return;
+        const ids = modsWithin(full.treeData, keys).map(m => m.modId!).filter(id => id != null);
+        if (ids.length === 0) return;
+        const vm = await IoC.get(HomeViewModel);
+        await vm.batchSetModEnabled(ids, enable, false);
+        await logActivity('info', t(enable ? "log.list.folderModsEnabled" : "log.list.folderModsDisabled", {count: ids.length}),
+            nameList(keys.map(k => this.folderTitle(k, full.treeData))), 'list');
+        await emitEvent("mod-batch-enabled-change", {modIds: ids, enabled: enable});
+        clearPendingEnabled();
+        await this.updateTreeView();
+        await this.updateCountLabel();
+        this.refreshUnsavedState();
+    }
+
+    private async moveFoldersTo(keys: string[], target: string | null) {
+        const ok = await this.treeViewRef.current?.moveFolders(keys, target);
+        if (ok === false) {
+            message.warning(t("folders.cantMoveInside"));
+            return;
+        }
+        // the folders have new ids now
+        this.setState({checkedKeys: []});
+    }
+
+    /**
+     * Delete folders, asking first: with their mods, or keeping the mods (what was in each folder
+     * takes its place). At least one folder has to stay.
+     */
+    private async deleteFolders(keys: string[]) {
+        const full = await this.treeViewRef.current?.fullTree();
+        if (!full) return;
+        const tree = full.treeData;
+        const top = topmost(tree, keys);
+        if (top.length === 0) return;
+        const allFolders = folderKeysInOrder(tree);
+        const goneWithMods = withSubfolders(tree, top);
+        const mods = modsWithin(tree, top);
+        const names = top.map(k => this.folderTitle(k, tree));
+        const canDeleteAll = goneWithMods.length < allFolders.length;
+        const canKeep = new Set(keys).size < allFolders.length;
+        if (!canDeleteAll && !canKeep) {
+            message.warning(t("group.cannotDeleteLast"));
+            return;
+        }
+        const one = top.length === 1;
+        const choices: { key: string; label: string; danger?: boolean; primary?: boolean }[] = [];
+        if (mods.length > 0 && canKeep) choices.push({key: "keep", label: t(one ? "folders.deleteKeepModsOne" : "folders.deleteKeepMods"), primary: true});
+        // red and solid: the themes grey out plain buttons, also red ones
+        if (canDeleteAll) choices.push(mods.length > 0
+            ? {key: "all", label: t(one ? "folders.deleteWithModsOne" : "folders.deleteWithMods", {count: mods.length}), danger: true, primary: true}
+            : {key: "all", label: t("group.deleteOk"), danger: true, primary: true});
+        const subfolders = goneWithMods.length - top.length;
+        const subText = subfolders > 0 ? t("folders.deleteSub", {count: subfolders}) : "";
+        const ask = mods.length
+            ? t(one ? "folders.deleteAskOne" : "folders.deleteAskMany", {name: names[0], folders: top.length, count: mods.length, sub: subText})
+            : t(one ? "folders.deleteAskEmptyOne" : "folders.deleteAskEmptyMany", {name: names[0], folders: top.length, sub: subText});
+        const choice = await MessageBox.choose({
+            title: one ? t("Delete Group") : t("folders.deleteTitleMany", {count: top.length}),
+            content: React.createElement("div", null,
+                React.createElement("div", null, ask),
+                one ? null : React.createElement("div", {style: {marginTop: 8, opacity: 0.8, wordBreak: "break-word"}}, nameList(names, 8)),
+                !canDeleteAll ? React.createElement("div", {style: {marginTop: 8, opacity: 0.8}}, t("folders.deleteKeepOnly")) : null),
+            width: 560,
+        }, choices, t("Cancel"));
+        if (!choice) return;
+        try {
+            if (choice === "keep") {
+                if (!(await this.treeViewRef.current?.dissolveFolders(keys))) return;
+            } else {
+                const vm = await IoC.get(HomeViewModel);
+                for (const key of top) {
+                    const id = Number(key.slice("folder-".length));
+                    await vm.removeGroup(id);
+                }
+                // like removing the mods one by one: files MINTCAT downloaded for them go too
+                for (const mod of mods) {
+                    if (mod.modId != null) await cleanupRemovedRepositoryMod(mod.modId);
+                }
+                if (mods.length) {
+                    await logActivity('info', t("log.list.folderModsRemoved", {count: mods.length}),
+                        nameList(mods.map(m => String(m.title ?? m.key))), 'list');
+                }
+                await this.updateTreeView();
+            }
+            this.setState({checkedKeys: []});
+            await this.updateCountLabel();
+            this.refreshUnsavedState();
+        } catch (error) {
+            if (error instanceof LastGroupCannotDeleteError) {
+                message.warning(t("group.cannotDeleteLast"));
+            } else {
+                console.error("[HomePage] Delete folders failed:", error);
+                message.error(String(error));
+            }
+            await this.updateTreeView();
+        }
+    }
+
+    // ---- Only these folders on ----------------------------------------------------------------
+
+    private soloKey(profileId: number): string {
+        return `folders.solo.${profileId}`;
+    }
+
+    private async readSolo(profileId: number): Promise<{ time: number; folders: string[]; enabled: number[]; all: number[] } | null> {
+        try {
+            const raw = await (await StorageAPI.getSettings()).getValue(this.soloKey(profileId));
+            const parsed = raw ? JSON.parse(raw) : null;
+            return parsed && Array.isArray(parsed.enabled) && Array.isArray(parsed.all) ? parsed : null;
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Only the mods in these folders on, every other one off (to find which mod causes a
+     * problem). How everything was is kept, so the banner can put it back.
+     */
+    private async onlyFoldersOn(keys: string[]) {
+        const full = await this.treeViewRef.current?.fullTree();
+        if (!full) return;
+        const profile = await (await StorageAPI.getProfiles()).getActiveProfile();
+        if (!profile?.id) return;
+        const all = modsWithin(full.treeData, folderKeysInOrder(full.treeData));
+        // mods outside any folder count too
+        const walkTop = (full.treeData as any[]).filter(n => n.isLeaf);
+        const everyMod = [...all, ...walkTop];
+        const keep = new Set(modsWithin(full.treeData, keys).map(m => m.modId));
+        const names = keys.length > 1 ? topmost(full.treeData, keys).map(k => this.folderTitle(k, full.treeData)) : [this.folderTitle(keys[0], full.treeData)];
+        const before = await this.readSolo(profile.id);
+        const snapshot = {
+            time: before?.time ?? Date.now(),
+            folders: names,
+            // the first time only: that's the way back
+            enabled: before?.enabled ?? everyMod.filter(m => m.enabled !== false).map(m => m.modId!),
+            all: before?.all ?? everyMod.map(m => m.modId!),
+        };
+        await (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id), JSON.stringify(snapshot));
+        const on = everyMod.filter(m => keep.has(m.modId)).map(m => m.modId!);
+        const off = everyMod.filter(m => !keep.has(m.modId)).map(m => m.modId!);
+        const vm = await IoC.get(HomeViewModel);
+        await vm.batchSetModEnabled(on, true, false);
+        await vm.batchSetModEnabled(off, false, false);
+        await logActivity('info', t("log.list.onlyFolders", {on: on.length, off: off.length}), nameList(names), 'list');
+        if (on.length) await emitEvent("mod-batch-enabled-change", {modIds: on, enabled: true});
+        if (off.length) await emitEvent("mod-batch-enabled-change", {modIds: off, enabled: false});
+        clearPendingEnabled();
+        await this.updateTreeView();
+        await this.updateCountLabel();
+        await this.refreshUnsavedState();
+    }
+
+    /** Put every mod back on or off as it was before "Only these folders on" (or keep it as it is) */
+    @autoBind
+    private async endSolo(restore: boolean) {
+        const profile = await (await StorageAPI.getProfiles()).getActiveProfile();
+        if (!profile?.id) return;
+        const snapshot = await this.readSolo(profile.id);
+        await (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id), "");
+        if (snapshot && restore) {
+            const full = await this.treeViewRef.current?.fullTree();
+            if (full) {
+                const everyMod = [...modsWithin(full.treeData, folderKeysInOrder(full.treeData)), ...(full.treeData as any[]).filter(n => n.isLeaf)];
+                const wasOn = new Set(snapshot.enabled);
+                const known = new Set(snapshot.all);
+                // mods added since keep whatever they are now
+                const on = everyMod.filter(m => known.has(m.modId!) && wasOn.has(m.modId!) && m.enabled === false).map(m => m.modId!);
+                const off = everyMod.filter(m => known.has(m.modId!) && !wasOn.has(m.modId!) && m.enabled !== false).map(m => m.modId!);
+                const vm = await IoC.get(HomeViewModel);
+                await vm.batchSetModEnabled(on, true, false);
+                await vm.batchSetModEnabled(off, false, false);
+                await logActivity('info', t("log.list.soloRestored", {on: on.length, off: off.length}), undefined, 'list');
+                if (on.length) await emitEvent("mod-batch-enabled-change", {modIds: on, enabled: true});
+                if (off.length) await emitEvent("mod-batch-enabled-change", {modIds: off, enabled: false});
+                clearPendingEnabled();
+                await this.updateTreeView();
+                await this.updateCountLabel();
+            }
+        } else if (snapshot) {
+            await logActivity('info', t("log.list.soloKept"), undefined, 'list');
+        }
+        await this.refreshUnsavedState();
+    }
+
+    /** The bottom bar's Folders menu: the same actions for the ticked folders */
+    private renderFolderBarMenu() {
+        const picked = this.pickedFolderKeys();
+        if (picked.length === 0) return null;
+        const top = topmost(this.state.treeData as any[], picked);
+        const exclude = new Set(withSubfolders(this.state.treeData as any[], picked));
+        const many = top.length > 1;
+        const count = top.length;
+        const items: MenuProps['items'] = [
+            {key: "folders_enable", label: many ? t("folders.enableAllMany", {count}) : t("folders.enableAll"), icon: <PlayCircleOutlined/>},
+            {key: "folders_disable", label: many ? t("folders.disableAllMany", {count}) : t("folders.disableAll"), icon: <PauseCircleOutlined/>},
+            {key: "folders_only", label: many ? t("folders.onlyTheseMany") : t("folders.onlyThis"), icon: <AimOutlined/>},
+            {type: "divider"},
+            {key: "expand_folder", label: many ? t("folders.expandMany", {count}) : t("folders.expandOne"), icon: <ColumnHeightOutlined/>},
+            {key: "collapse_folder", label: many ? t("folders.collapseMany", {count}) : t("folders.collapseOne"), icon: <VerticalAlignMiddleOutlined/>},
+            {type: "divider"},
+            {key: "folders_color", label: many ? t("folders.colorMany", {count}) : t("folderColor.menu"), icon: <BgColorsOutlined/>},
+            {
+                key: "move", label: many ? t("folders.moveMany", {count}) : t("Move To"), icon: <FolderOpenOutlined/>,
+                children: [
+                    {key: "move_folders_to:root", label: t("folders.topLevel")},
+                    ...this.getFolderChoices().filter(f => !exclude.has(String(f.key)))
+                        .map(f => ({key: `move_folders_to:${f.key}`, label: f.label, icon: <FolderOutlined/>})),
+                ],
+            },
+            {type: "divider"},
+            {key: "delete_group", label: many ? t("folders.deleteMany", {count}) : t("Delete Group"), icon: <DeleteOutlined/>, danger: true},
+        ];
+        return (
+            <Dropdown trigger={["click"]}
+                      menu={{
+                          items,
+                          // the bar acts on all ticked folders (a lone folder: on it, like its own menu)
+                          onClick: ({key}) => void this.onFolderBarClick(String(key), picked, top),
+                          style: {maxHeight: 420, overflowY: "auto"},
+                      }}>
+                <Button type="text" size={"small"} icon={<FolderOutlined/>}>
+                    {t("folders.barButton", {count: top.length})} <DownOutlined style={{fontSize: 10}}/>
+                </Button>
+            </Dropdown>
+        );
+    }
+
+    /** The bottom bar's Folders menu: the ticked folders (ones ticked with their parent go along) */
+    private async onFolderBarClick(key: string, picked: string[], top: string[]) {
+        const keys = top.length > 1 ? picked : top;
+        if (key.startsWith("move_folders_to:")) {
+            const target = key.slice("move_folders_to:".length);
+            await this.moveFoldersTo(keys, target === "root" ? null : target);
+            return;
+        }
+        switch (key) {
+            case "expand_folder":
+            case "collapse_folder":
+                // from the bar: with subfolders, also for one folder
+                this.expandFolders(picked, key === "expand_folder");
+                break;
+            case "folders_enable":
+            case "folders_disable":
+                await this.setFoldersEnabled(keys, key === "folders_enable");
+                break;
+            case "folders_only":
+                await this.onlyFoldersOn(keys);
+                break;
+            case "folders_color":
+                this.colorFolders(keys);
+                break;
+            case "delete_group":
+                await this.deleteFolders(keys);
+                break;
+        }
+    }
+
+    /** "Only these folders on" is in effect: say so, with the way back */
+    private renderSoloBanner() {
+        const solo = this.state.solo;
+        if (!solo) return null;
+        return (
+            <Alert type="warning" showIcon
+                   style={{margin: "0 4px 4px", padding: "4px 10px"}}
+                   message={t("folders.soloBanner", {folders: nameList(solo.folders, 4)})}
+                   action={
+                       <Space size={4}>
+                           <Button size="small" type="primary" icon={<UndoOutlined/>} onClick={() => void this.endSolo(true)}>
+                               {t("folders.soloRestore")}
+                           </Button>
+                           <Button size="small" onClick={() => void this.endSolo(false)}>
+                               {t("folders.soloKeep")}
+                           </Button>
+                       </Space>
+                   }/>
+        );
+    }
+
     @autoBind
     private async onMenuClick(key: string, nodeKey: string) {
         const vm = await IoC.get(HomeViewModel);
@@ -1387,14 +1694,27 @@ export class HomePage extends BasePage<any, ModListPageState> {
         // Extract ID for tree nodes
         const id = extractId(nodeKey);
 
+        if (key.startsWith("move_folders_to:")) {
+            const target = key.slice("move_folders_to:".length);
+            await this.moveFoldersTo(this.folderTargets(nodeKey), target === "root" ? null : target);
+            return;
+        }
+
         switch (key) {
             case "expand_folder":
-            case "collapse_folder": {
-                // just this folder (the toolbar button does all of them)
-                const open = (this.state.expandedKeys ?? []).map(String).filter(k => k !== String(nodeKey));
-                this.onTreeNodeExpand(key === "expand_folder" ? [...open, String(nodeKey)] : open);
+            case "collapse_folder":
+                this.expandFolders(this.folderTargets(nodeKey), key === "expand_folder");
                 break;
-            }
+            case "folders_enable":
+            case "folders_disable":
+                await this.setFoldersEnabled(this.folderTargets(nodeKey), key === "folders_enable");
+                break;
+            case "folders_only":
+                await this.onlyFoldersOn(this.folderTargets(nodeKey));
+                break;
+            case "folders_color":
+                this.colorFolders(this.folderTargets(nodeKey));
+                break;
             case "add_new_group": {
                 this.inputDialogRef.current?.setCallback(
                     t("Add New Group"),
@@ -1416,33 +1736,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                     }).show();
                 break;
             case "delete_group":
-                try {
-                    // Deleting a folder takes the mods in it (and in its subfolders) out of the
-                    // profile; one click in the menu shouldn't do that without asking
-                    const inside = await this.countModsInFolder(id);
-                    if (inside.mods > 0) {
-                        const ok = await MessageBox.confirm({
-                            title: t("Delete Group"),
-                            content: t("group.deleteConfirm", {name: inside.name, count: inside.mods}),
-                            okText: t("group.deleteOk"),
-                        });
-                        if (!ok) break;
-                    }
-                    await vm.removeGroup(id);
-                    // like removing the mods one by one: files MINTCAT downloaded for them go too
-                    for (const modId of inside.modIds) {
-                        await cleanupRemovedRepositoryMod(modId);
-                    }
-                    shouldUpdateTree = true;
-                    // the enabled/total count at the bottom included the removed mods
-                    shouldUpdateCount = inside.mods > 0;
-                } catch (error) {
-                    if (error instanceof LastGroupCannotDeleteError) {
-                        message.warning(t("group.cannotDeleteLast"));
-                    } else {
-                        console.error(`[HomePage] Delete group failed for id=${id}:`, error);
-                    }
-                }
+                await this.deleteFolders(this.folderTargets(nodeKey));
                 break;
             case "rename_group":
                 const groupName = await vm.getGroupName(id);
@@ -1867,19 +2161,21 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                 <SearchBox onUpdateTreeView={this.updateTreeView}/>
                             </Typography.Link>
                         </Space>
+                        {this.renderSoloBanner()}
                         <div style={{
-                            height: window.innerHeight - 145 - this.logPanelOffset,
+                            height: window.innerHeight - 145 - this.logPanelOffset - (this.state.solo ? HomePage.SOLO_BANNER_HEIGHT : 0),
                             overflow: "hidden",
                             position: "relative",
                         }}>
                             <TreeView
+                                ref={this.treeViewRef}
                                 treeData={this.state.treeData}
                                 isMultiSelect={this.state.isMultiSelect}
                                 expandedKeys={this.state.expandedKeys}
                                 selectedKeys={this.state.selectedKeys}
                                 checkedKeys={this.state.checkedKeys}
                                 virtual={this.state.virtual}
-                                height={window.innerHeight - 145 - this.logPanelOffset}
+                                height={window.innerHeight - 145 - this.logPanelOffset - (this.state.solo ? HomePage.SOLO_BANNER_HEIGHT : 0)}
                                 onMenuClick={this.onMenuClick}
                                 onUpdateTreeView={this.updateTreeView}
                                 onCountLabelUpdate={this.updateCountLabel}
@@ -1949,6 +2245,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                                             onClick={this.onMultiCopyClick}>
                                         {t("Copy")}
                                     </Button>
+                                    {this.renderFolderBarMenu()}
                                 </Space>
                             }
                             <CountLabel enableCount={this.state.enableCount} totalCount={this.state.totalCount}/>

@@ -21,7 +21,11 @@ import {
     VerticalAlignMiddleOutlined,
     ColumnHeightOutlined,
     WarningOutlined,
+    PlayCircleOutlined,
+    PauseCircleOutlined,
+    AimOutlined,
 } from "@ant-design/icons";
+import {folderCounts} from "./FolderOps";
 import {open} from "@tauri-apps/plugin-shell";
 import {emitEvent, useFilteredEventListener} from "@/events";
 import {ModSourceType} from "@/storage/db/Schema.ts";
@@ -189,13 +193,17 @@ async function getModById(modId: number): Promise<CompleteModData | null> {
 }
 
 
-function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expanded}: {
+function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expanded, folderPick, onRowClick}: {
     nodeData: any;
     onMenuClick: any;
     folders?: FolderInfo[];
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
     /** Whether this folder is open (the menu offers the opposite) */
     expanded?: boolean;
+    /** This folder is one of several ticked folders: the menu acts on all of them */
+    folderPick?: { count: number; exclude: string[] };
+    /** Ctrl/Shift-click ticks the folder (all its mods) */
+    onRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
 }) {
     const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
     const colorKey: string = nodeData.colorKey ?? nodeData.key;
@@ -217,15 +225,53 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
         }
     };
     collectSubfolders(nodeData.children);
-    const moveToChildren: MenuProps['items'] = folders
-        ?.filter(f => f.key !== nodeData.key && !ownSubfolders.has(String(f.key)))
-        .map(f => ({
-            key: `move_to_${f.key}`,
-            label: f.title,
-            icon: <FolderOutlined />,
-        })) || [];
+    const many = folderPick && folderPick.count > 1 ? folderPick.count : 0;
+    const excluded = new Set(many ? folderPick!.exclude : []);
+    const moveToChildren: MenuProps['items'] = [
+        {key: 'move_folders_to:root', label: t('folders.topLevel'), icon: <VerticalAlignTopOutlined />},
+        ...(folders
+            ?.filter(f => f.key !== nodeData.key && !ownSubfolders.has(String(f.key)) && !excluded.has(String(f.key)))
+            .map(f => ({
+                // one folder: the existing move (into the top of the folder); several: all at once
+                key: many ? `move_folders_to:${f.key}` : `move_to_${f.key}`,
+                label: f.title,
+                icon: <FolderOutlined />,
+            })) ?? []),
+    ];
 
-    const contextMenusGroup: MenuProps['items'] = [
+    // How many mods it holds and how many are off; a switch flipped in it updates the count
+    const [, recount] = React.useReducer((n: number) => n + 1, 0);
+    const modIds = React.useMemo(() => {
+        const ids = new Set<number>();
+        const walk = (list: any[] | undefined) => {
+            for (const child of list ?? []) {
+                if (child.isLeaf) ids.add(child.modId);
+                else walk(child.children);
+            }
+        };
+        walk(nodeData.children);
+        return ids;
+    }, [nodeData]);
+    useFilteredEventListener('mod-enabled-change', (p) => modIds.has(p.modId), () => recount(), [modIds]);
+    useFilteredEventListener('mod-batch-enabled-change', (p) => p.modIds.some(id => modIds.has(id)), () => recount(), [modIds]);
+    const counts = folderCounts(nodeData, (m: any) => getPendingEnabled(m.modId, m.enabled !== false));
+
+    const manyMenu: MenuProps['items'] = [
+        {type: 'group', label: t('folders.pickedCount', {count: many})},
+        {label: t('folders.enableAllMany', {count: many}), key: 'folders_enable', icon: <PlayCircleOutlined />},
+        {label: t('folders.disableAllMany', {count: many}), key: 'folders_disable', icon: <PauseCircleOutlined />},
+        {label: t('folders.onlyTheseMany'), key: 'folders_only', icon: <AimOutlined />},
+        {type: 'divider'},
+        {label: t('folders.expandMany', {count: many}), key: 'expand_folder', icon: <ColumnHeightOutlined />},
+        {label: t('folders.collapseMany', {count: many}), key: 'collapse_folder', icon: <VerticalAlignMiddleOutlined />},
+        {type: 'divider'},
+        {label: t('folders.colorMany', {count: many}), key: 'folders_color', icon: <BgColorsOutlined />},
+        {label: t('folders.moveMany', {count: many}), key: 'move_to', icon: <DragOutlined />, children: moveToChildren},
+        {type: 'divider'},
+        {label: t('folders.deleteMany', {count: many}), key: 'delete_group', icon: <DeleteOutlined />, danger: true},
+    ];
+
+    const contextMenusGroup: MenuProps['items'] = many ? manyMenu : [
         {label: t('Add Mod'), key: 'add_mod', icon: <PlusCircleOutlined />},
         {label: t('Add New Group'), key: 'add_new_group', icon: <FolderAddOutlined />},
         {label: t('Add Sub Group'), key: 'add_sub_group', icon: <FolderAddOutlined />},
@@ -237,6 +283,10 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
             icon: <DragOutlined />,
             children: moveToChildren,
         }] : []),
+        {type: 'divider'},
+        {label: t('folders.enableAll'), key: 'folders_enable', icon: <PlayCircleOutlined />, disabled: counts.total === 0},
+        {label: t('folders.disableAll'), key: 'folders_disable', icon: <PauseCircleOutlined />, disabled: counts.total === 0},
+        {label: t('folders.onlyThis'), key: 'folders_only', icon: <AimOutlined />, disabled: counts.total === 0},
         {type: 'divider'},
         // this folder only (the toolbar button opens or closes all of them)
         expanded
@@ -251,11 +301,15 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
                   menu={{
                       items: contextMenusGroup,
                       onClick: (e) => {
+                          // The click would reach the tree through the menu (React passes events
+                          // up through portals) and count as a plain click on the folder there,
+                          // which ends a Ctrl/Shift selection
+                          e.domEvent.stopPropagation();
                           // 处理 "移动到" 子菜单点击
                           if (e.key.startsWith('move_to_folder-')) {
                               const targetFolderKey = e.key.replace('move_to_', '');
                               onMoveToFolder?.(nodeData.key, targetFolderKey);
-                          } else if (e.key === 'folder_color') {
+                          } else if (e.key === 'folder_color' && !many) {
                               ModListAppearance.openFolderColor(colorKey, String(nodeData.title ?? ""));
                           } else {
                               onMenuClick(e.key, nodeData.key);
@@ -270,11 +324,17 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expa
                         backgroundColor: folderColor ?? "rgba(238,238,238,0.2)",
                         color: folderColor ? readableTextOn(folderColor) : undefined,
                     }}
-                          onClick={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                              e.stopPropagation();
+                              if (e.ctrlKey || e.metaKey || e.shiftKey) onRowClick?.(String(nodeData.key), e);
+                          }}
                           onMouseDown={(e) => e.stopPropagation()}
                           onFocus={(e) => e.stopPropagation()}
                     >
                       <b><FolderOutlined/> {nodeData.title}</b>
+                      <span className="folder-counts">
+                          {` · ${counts.total}`}{counts.off > 0 ? ` · ${t('folders.off', {count: counts.off})}` : ""}
+                      </span>
                     </span>
         </Dropdown>
     );
@@ -1327,6 +1387,8 @@ export interface TreeViewItemProps {
     onRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
     /** A folder: whether it is open */
     expanded?: boolean;
+    /** A folder that is one of several ticked folders */
+    folderPick?: { count: number; exclude: string[] };
 }
 
 /**
@@ -1349,6 +1411,7 @@ function TreeViewItemInner({
     groupFirst,
     onRowClick,
     expanded,
+    folderPick,
 }: TreeViewItemProps) {
     const {token} = useToken();
     const describedMod = React.useMemo(() => ({
@@ -1508,6 +1571,8 @@ function TreeViewItemInner({
                 folders={folders}
                 onMoveToFolder={onMoveToFolder}
                 expanded={expanded}
+                folderPick={folderPick}
+                onRowClick={onRowClick}
             />
         );
     }

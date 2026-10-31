@@ -110,8 +110,10 @@ export class HomeViewModel extends BaseViewModel {
     /**
      * 批量设置 mod 启用状态（单条 SQL）
      */
-    public async batchSetModEnabled(modIds: number[], enable: boolean): Promise<void> {
+    /** @param log false when the caller writes its own Log line */
+    public async batchSetModEnabled(modIds: number[], enable: boolean, log = true): Promise<void> {
         await this.homeService.batchSetModEnabled(modIds, enable);
+        if (!log || modIds.length === 0) return;
         const names = await Promise.all(modIds.map(id => this.modName(id)));
         await logActivity('info', t(enable ? "log.list.enabledMany" : "log.list.disabledMany", {count: modIds.length}), nameList(names), 'list');
     }

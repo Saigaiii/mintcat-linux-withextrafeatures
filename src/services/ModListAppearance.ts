@@ -34,7 +34,7 @@ let look: ModListLook = {
 };
 let version = 0;
 const listeners = new Set<() => void>();
-let editingFolder: { key: string; name: string } | null = null;
+let editingFolder: { key: string; name: string; keys?: string[]; names?: string[] } | null = null;
 
 function notify() {
     version++;
@@ -119,9 +119,16 @@ export const ModListAppearance = {
     },
 
     async setFolderColor(folderKey: string, color: string | null): Promise<void> {
+        await ModListAppearance.setFolderColors([folderKey], color);
+    },
+
+    /** The same color (or none) for several folders, saved once */
+    async setFolderColors(folderKeys: string[], color: string | null): Promise<void> {
         const folderColors = {...look.folderColors};
-        if (color && isColor(color)) folderColors[folderKey] = color;
-        else delete folderColors[folderKey];
+        for (const folderKey of folderKeys) {
+            if (color && isColor(color)) folderColors[folderKey] = color;
+            else delete folderColors[folderKey];
+        }
         look = {...look, folderColors};
         notify();
         await persist();
@@ -173,9 +180,16 @@ export const ModListAppearance = {
         await persist();
     },
 
-    /** Folder whose color is being chosen (the Folder color dialog shows while set) */
-    editing(_version: number): { key: string; name: string } | null {
+    /** Folder(s) whose color is being chosen (the Folder color dialog shows while set) */
+    editing(_version: number): { key: string; name: string; keys?: string[]; names?: string[] } | null {
         return editingFolder;
+    },
+
+    /** Choose one color for several folders */
+    openFolderColors(folders: { key: string; name: string }[]): void {
+        if (folders.length === 0) return;
+        editingFolder = {key: folders[0].key, name: folders[0].name, keys: folders.map(f => f.key), names: folders.map(f => f.name)};
+        notify();
     },
 
     openFolderColor(key: string, name: string): void {

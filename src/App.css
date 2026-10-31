@@ -755,3 +755,10 @@ body::before {
 .ant-progress-rail {
    background-color: transparent !important; 
 }
+/* "· 23 · 2 off" after a folder's name: how many mods it holds and how many are off */
+.folder-counts {
+    font-weight: 400;
+    opacity: 0.7;
+    font-size: 12px;
+    white-space: nowrap;
+}

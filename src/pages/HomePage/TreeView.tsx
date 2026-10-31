@@ -13,6 +13,7 @@ import {TreeViewItem} from "./TreeViewItem";
 import {dragAndDrop} from "./DragAndDropTree";
 import {DragAutoScroll} from "./DragAutoScroll";
 import {gatherAround, groupSpread, leavesInOrder, moveGroupToPosition, moveToPosition} from "./TreeMoves";
+import {dissolveFolders, folderKeysInOrder, folderPath, moveFoldersInto, pickedFolders, topmost, withSubfolders} from "./FolderOps";
 import {MessageBox} from "@/components/MessageBox";
 import {logActivity, nameList} from "@/services/ActivityLog";
 import {t} from "i18next";
@@ -502,6 +503,102 @@ export class TreeView extends React.Component<TreeViewProps> {
         }
     }
 
+    /** For a folder's menu: how many folders it acts on, and where they can't be moved */
+    private folderPickFor(key: string): { count: number; exclude: string[] } | undefined {
+        const {picked, top, exclude} = this.folderPick();
+        // several folders (a folder ticked with its subfolders is still one)
+        return top.length > 1 && picked.includes(key) ? {count: top.length, exclude} : undefined;
+    }
+
+    private folderPickCache: { treeData: unknown; checked: unknown; multi: boolean; picked: string[]; top: string[]; exclude: string[] } | null = null;
+
+    /** Folders ticked as a whole (when several are), and those with their subfolders */
+    private folderPick(): { picked: string[]; top: string[]; exclude: string[] } {
+        const {treeData, checkedKeys, isMultiSelect} = this.props;
+        const c = this.folderPickCache;
+        if (c && c.treeData === treeData && c.checked === checkedKeys && c.multi === !!isMultiSelect) return c;
+        const raw: any = checkedKeys;
+        const picked = isMultiSelect ? pickedFolders(treeData as any[], Array.isArray(raw) ? raw : (raw?.checked ?? [])) : [];
+        const top = topmost(treeData as any[], picked);
+        const exclude = top.length > 1 ? withSubfolders(treeData as any[], picked) : [];
+        this.folderPickCache = {treeData, checked: checkedKeys, multi: !!isMultiSelect, picked, top, exclude};
+        return this.folderPickCache;
+    }
+
+    /** The whole list as tree data (not only what the search shows) */
+    public async fullTree(): Promise<{ treeData: any[]; converter: TreeViewConverter }> {
+        await IoC.get(TreeViewModel);
+        const profileVM = await IoC.get(ProfileViewModel);
+        const activeRoot = await profileVM.getActiveProfileTreeRoot();
+        const converter = new TreeViewConverter(await this.getAllModsAsList());
+        const filterList = TreeViewConverter.filterList;
+        TreeViewConverter.filterList = [];
+        try {
+            return {treeData: (converter.convertToFromRoot(activeRoot) ?? []) as any[], converter};
+        } finally {
+            TreeViewConverter.filterList = filterList;
+        }
+    }
+
+    /** Save a changed tree; folders whose name path changed keep their colors */
+    private async saveTree(treeData: any[], converter: TreeViewConverter, pathsBefore: Map<string, string>): Promise<boolean> {
+        const profileTreeItem = converter.convertFrom(treeData);
+        if (!profileTreeItem || profileTreeItem.children.length === 0) return false;
+        const profileVM = await IoC.get(ProfileViewModel);
+        await profileVM.saveProfileTreeToDatabase(profileTreeItem);
+        // outer folders first: renaming a color key moves its subfolders' keys along
+        const renamed: string[] = [];
+        for (const key of folderKeysInOrder(treeData)) {
+            const before = pathsBefore.get(key);
+            const after = folderPath(treeData, key);
+            if (!before || !after || before === after) continue;
+            if (renamed.some(r => before.startsWith(r + "/"))) continue;
+            await ModListAppearance.renameFolderKey(FOLDER_COLOR_PREFIX + before, FOLDER_COLOR_PREFIX + after);
+            renamed.push(before);
+        }
+        this.props.onModListChange?.();
+        await this.props.onUpdateTreeView?.();
+        return true;
+    }
+
+    private static pathsOf(treeData: any[]): Map<string, string> {
+        const out = new Map<string, string>();
+        for (const key of folderKeysInOrder(treeData)) {
+            const path = folderPath(treeData, key);
+            if (path) out.set(key, path);
+        }
+        return out;
+    }
+
+    /**
+     * Move folders into another folder (or to the top level: `target` null), with everything in
+     * them. False when that's not possible (the target is one of them or inside one).
+     */
+    public async moveFolders(keys: string[], target: string | null): Promise<boolean> {
+        const {treeData, converter} = await this.fullTree();
+        const names = keys.map(k => titleOf(treeData, k));
+        const before = TreeView.pathsOf(treeData);
+        const moved = moveFoldersInto(treeData, keys, target);
+        if (!moved) return false;
+        if (moved.length === 0) return true;
+        if (!(await this.saveTree(treeData, converter, before))) return false;
+        await logActivity('info', t("log.list.foldersMoved", {count: moved.length, folder: target ? titleOf(treeData, target) : t("log.list.topLevel")}),
+            nameList(names), 'list');
+        return true;
+    }
+
+    /** Delete folders but keep their mods: what was in each folder takes its place */
+    public async dissolveFolders(keys: string[]): Promise<boolean> {
+        const {treeData, converter} = await this.fullTree();
+        const names = keys.map(k => titleOf(treeData, k));
+        const before = TreeView.pathsOf(treeData);
+        const gone = dissolveFolders(treeData, keys);
+        if (gone.length === 0) return true;
+        if (!(await this.saveTree(treeData, converter, before))) return false;
+        await logActivity('info', t("log.list.foldersDissolved", {count: gone.length}), nameList(names), 'list');
+        return true;
+    }
+
     @autoBind
     private onCustomTitleRender(nodeData: any) {
         const folders = this.getFolderList();
@@ -525,6 +622,7 @@ export class TreeView extends React.Component<TreeViewProps> {
                 groupFirst={groupFirst}
                 onRowClick={this.props.onTreeRowClick}
                 expanded={nodeData.isLeaf ? undefined : (this.props.expandedKeys ?? []).map(String).includes(String(nodeData.key))}
+                folderPick={nodeData.isLeaf ? undefined : this.folderPickFor(String(nodeData.key))}
             />
         );
     }
