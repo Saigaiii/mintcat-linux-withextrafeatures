@@ -27,6 +27,7 @@ import {
     UE4SS_SETTING_ENABLED,
     type Ue4ssSetting,
 } from "@/utils/Ue4ssSetting.ts";
+import {confirmDelete, DeleteConfirm} from "@/services/DeleteConfirm";
 
 
 
@@ -51,6 +52,7 @@ export function MintCatSettings() {
     const [ue4ss, setUe4ss] = React.useState<Ue4ssSetting>(UE4SS_SETTING_ENABLED);
     const [releaseChannel, setReleaseChannel] = React.useState<ReleaseChannel>(DEFAULT_RELEASE_CHANNEL);
     const descriptionHover = React.useSyncExternalStore(ModDescriptions.subscribe, ModDescriptions.isEnabled);
+    const askBeforeDeleting = React.useSyncExternalStore(DeleteConfirm.subscribe, DeleteConfirm.isEnabled);
     const lookVersion = React.useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
     const advanced = useAdvancedShown();
     const look = ModListAppearance.get(lookVersion);
@@ -174,21 +176,17 @@ export function MintCatSettings() {
     }
 
     const onClearCacheClick = async () => {
-        Modal.confirm({
+        const ok = await confirmDelete({
             title: t("Clear Current Cache"),
-            icon: <ExclamationCircleFilled />,
             content: t("Clear Cache Warning"),
             okText: t("Clean"),
-            okType: 'danger',
-            cancelText: t("Cancel"),
-            onOk: async () => {
-                if (await CacheApi.cleanCurrentCache()) {
-                    message.success(t("Clean Cache Success"));
-                } else {
-                    message.error(t("Clean Cache Failed"));
-                }
-            }
         });
+        if (!ok) return;
+        if (await CacheApi.cleanCurrentCache()) {
+            message.success(t("Clean Cache Success"));
+        } else {
+            message.error(t("Clean Cache Failed"));
+        }
     }
 
     const onImportConfigClick = async () => {
@@ -324,6 +322,10 @@ export function MintCatSettings() {
                   style={{marginBottom: "10px"}}
             >
                 <Form {...SettingLayout}>
+                    <Form.Item label={t("deleteConfirm.setting")} tooltip={t("help.confirmDelete")}>
+                        <Switch checked={askBeforeDeleting}
+                                onChange={(checked) => void DeleteConfirm.setEnabled(checked)}/>
+                    </Form.Item>
                     <Form.Item label={t("modDescription.setting")} tooltip={t("help.descriptionHover")}>
                         <Switch checked={descriptionHover}
                                 onChange={(checked) => {

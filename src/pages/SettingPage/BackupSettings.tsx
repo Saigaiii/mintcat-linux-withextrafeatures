@@ -65,6 +65,7 @@ import {ModSettingsImportDialog} from "@/dialogs/backup/ModSettingsImportDialog"
 import {RestoreBackupDialog} from "@/dialogs/backup/RestoreBackupDialog";
 import {ConnectCloudDialog} from "@/dialogs/backup/ConnectCloudDialog";
 import {KeptCopies, type CopiesInfo} from "@/services/KeptCopies";
+import {confirmDelete} from "@/services/DeleteConfirm";
 
 function errorText(e: unknown): string {
     return e instanceof Error ? e.message : String(e);
@@ -127,7 +128,7 @@ export function KeptCopiesRow({kind, refreshKey}: { kind: keyof typeof KEPT; ref
 
     const onDelete = async () => {
         if (!info || empty) return;
-        const ok = await MessageBox.confirm({
+        const ok = await confirmDelete({
             title: t(k.confirmTitle),
             content: t(k.confirm, {files: info.files, size}),
             okText: t("keptCopies.delete"),
@@ -449,10 +450,9 @@ export function BackupsCard() {
     };
 
     const onDelete = async (entry: BackupEntry) => {
-        const ok = await MessageBox.confirm({
+        const ok = await confirmDelete({
             title: t("Delete"),
             content: t("backup.deleteConfirm", {name: entry.name}),
-            okButtonProps: {danger: true},
         });
         if (!ok) return;
         try {

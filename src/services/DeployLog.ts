@@ -17,6 +17,8 @@ export interface DeployRecord {
     profile: string;
     /** Id of that profile (names can change); missing in records from older versions */
     profileId?: number;
+    /** That profile has since been deleted (its name is no longer kept) */
+    profileDeleted?: boolean;
     /** In install order (none after an uninstall) */
     mods: DeployedMod[];
     /** The mods were uninstalled from the game at `time` */
@@ -66,6 +68,24 @@ export const DeployLog = {
 
     async record(game: string, record: DeployRecord): Promise<void> {
         await (await StorageAPI.getSettings()).setValue(key(game), JSON.stringify(record));
+    },
+
+    /**
+     * A profile was deleted: the record of what's in the game stays (the mods are still
+     * there until the next deploy or uninstall), but no longer names that profile
+     */
+    async forgetProfile(profileId: number, name: string): Promise<void> {
+        const settings = await StorageAPI.getSettings();
+        for (const setting of await settings.namesWithPrefix("deploy.last.")) {
+            try {
+                const record = JSON.parse(await settings.getValue(setting)) as DeployRecord;
+                const matches = record.profileId !== undefined ? record.profileId === profileId : record.profile === name;
+                if (!matches || record.uninstalled) continue;
+                await settings.setValue(setting, JSON.stringify({...record, profile: "", profileId: undefined, profileDeleted: true}));
+            } catch {
+                // unreadable record: nothing to forget
+            }
+        }
     },
 
     /** The mods were taken out of the game (remembered, so the toolbar can say when) */

@@ -174,6 +174,21 @@ export const ModListAppearance = {
         await persist();
     },
 
+    /** Forget colors of folders no profile has any more (`keep`: color keys still in use) */
+    async keepOnlyFolderColors(keep: Set<string>): Promise<number> {
+        const folderColors: Record<string, string> = {};
+        let removed = 0;
+        for (const [key, color] of Object.entries(look.folderColors)) {
+            if (keep.has(key)) folderColors[key] = color;
+            else removed++;
+        }
+        if (removed === 0) return 0;
+        look = {...look, folderColors};
+        notify();
+        await persist();
+        return removed;
+    },
+
     async clearFolderColors(): Promise<void> {
         look = {...look, folderColors: {}};
         notify();

@@ -34,6 +34,7 @@ const LOGGED_SETTINGS: Record<string, 'value' | 'changed'> = {
     ue4ssVersion: 'value',
     'ui.showAdvancedSettings': 'value',
     'ui.modDescriptionOnHover': 'value',
+    'ui.confirmDelete': 'value',
     'privacy.usageStats': 'value',
     'ui.titleBarLook': 'changed',
     'ui.systemIcon': 'changed',
@@ -156,6 +157,18 @@ export class SettingDAO {
             console.error(`根据名称获取设置失败 [名称: ${name}]:`, error);
             throw error;
         }
+    }
+
+    /** Names of all settings starting with `prefix` */
+    public async namesWithPrefix(prefix: string): Promise<string[]> {
+        const db = await getDb();
+        const rows: any[] = await db.select({name: settings.name}).from(settings);
+        return rows.map(r => String(r.name)).filter(n => n.startsWith(prefix));
+    }
+
+    public async deleteValue(name: string): Promise<void> {
+        const db = await getDb();
+        await db.delete(settings).where(eq(settings.name, name));
     }
 
     public async setValue(name: string, value: string): Promise<void> {

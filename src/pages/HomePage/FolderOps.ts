@@ -222,3 +222,21 @@ export function folderPath(nodes: TreeNode[] | undefined, key: string, path: str
     }
     return null;
 }
+
+/**
+ * "Only these folders' mods on": which mods to switch on and off. Mods in the kept folders go
+ * back to how they were before the first such run (`wasOn`; mods switched off then stay off),
+ * every other mod goes off. Only mods whose state changes are listed.
+ */
+export function soloPlan(mods: { modId?: number; enabled?: boolean }[], keep: Set<number>, wasOn: Set<number>): { on: number[]; off: number[] } {
+    const on: number[] = [];
+    const off: number[] = [];
+    for (const mod of mods) {
+        if (mod.modId == null) continue;
+        const enabled = mod.enabled !== false;
+        const wanted = keep.has(mod.modId) && wasOn.has(mod.modId);
+        if (wanted && !enabled) on.push(mod.modId);
+        if (!wanted && enabled) off.push(mod.modId);
+    }
+    return {on, off};
+}

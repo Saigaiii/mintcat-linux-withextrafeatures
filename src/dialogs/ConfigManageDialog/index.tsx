@@ -8,6 +8,7 @@ import {MessageBox} from "@/components/MessageBox.ts";
 import {emitVoidEvent, useEventListener} from "@/events";
 import {DialogConfigService} from "@/services/DialogConfigService.ts";
 import {TimeUtils} from "@/utils/TimeUtils.ts";
+import {confirmDelete} from "@/services/DeleteConfirm";
 
 
 interface ListDataType extends ConfigDataType {
@@ -80,7 +81,7 @@ export const ConfigManageDialog = forwardRef((_props, ref) => {
     };
 
     const onDeleteClick = async (path: string) => {
-        const confirmed = await MessageBox.confirm({
+        const confirmed = await confirmDelete({
             title: t("Delete Config"),
             content: t("dialog.confirmDeleteConfigFolder"),
         });

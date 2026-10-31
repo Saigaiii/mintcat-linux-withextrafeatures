@@ -1,9 +1,12 @@
 import React from "react";
 import {t} from "i18next";
-import {Button, Card, Flex, Input, List, message, Modal} from "antd";
-import {CheckOutlined, CopyOutlined, DeleteOutlined, EditOutlined, PlusCircleOutlined} from "@ant-design/icons";
+import {Button, Card, Flex, Input, List, message, Modal, Tooltip, Typography} from "antd";
+import {CheckOutlined, CopyOutlined, DeleteOutlined, EditOutlined, PlusCircleOutlined, RollbackOutlined} from "@ant-design/icons";
 import {ProfileViewModel} from "@/dialogs/ProfileEditDialog/ProfileViewModel.ts";
 import { IoC } from "@/core/IoC.ts";
+import {MessageBox} from "@/components/MessageBox";
+import {confirmDelete, DeleteConfirm} from "@/services/DeleteConfirm";
+import {ProfileBackups, type ProfileBackup} from "@/services/ProfileCleanup";
 
 interface ProfileEditDialogStates {
     isModalOpen?: boolean;
@@ -11,6 +14,7 @@ interface ProfileEditDialogStates {
     editingKey?: string | null;
     editingValue?: string;
     profileList?: string[];
+    backups?: ProfileBackup[];
 }
 
 type InputCallback = (name: string) => void;
@@ -87,9 +91,48 @@ class ProfileEditDialog extends React.Component<any, ProfileEditDialogStates> {
         });
     }
 
+    /** Asks first (unless "Ask before deleting" is off): delete it, or keep a backup and delete */
     private async handleDelete(key: string) {
         const vm = await IoC.get(ProfileViewModel);
-        await vm.removeProfile(key);
+        if ((this.state.profileList?.length ?? 0) <= 1) {
+            message.error(t("profile.mustKeepAtLeastOne"));
+            return;
+        }
+        let backup = false;
+        if (await DeleteConfirm.enabled()) {
+            const choice = await MessageBox.choose({
+                title: t("profile.deleteTitle", {name: key}),
+                content: t("profile.deleteAsk"),
+                width: 540,
+            }, [
+                {key: "backup", label: t("profile.deleteWithBackup"), primary: true},
+                {key: "delete", label: t("profile.deleteNoBackup"), danger: true, primary: true},
+            ], t("Cancel"));
+            if (!choice) return;
+            backup = choice === "backup";
+        }
+        await vm.removeProfile(key, backup);
+        await this.fetchData();
+    }
+
+    private async handleRestoreBackup(backup: ProfileBackup) {
+        const result = await ProfileBackups.restore(backup.id);
+        if (!result) {
+            message.error(t("profile.restoreFailed"));
+            return;
+        }
+        message.success(t("profile.restored", {name: result.name}));
+        if (result.missing > 0) message.warning(t("profile.restoredMissing", {count: result.missing}));
+        await this.fetchData();
+    }
+
+    private async handleDeleteBackup(backup: ProfileBackup) {
+        const ok = await confirmDelete({
+            title: t("profile.backupDeleteTitle"),
+            content: t("profile.backupDeleteAsk", {name: backup.name}),
+        });
+        if (!ok) return;
+        await ProfileBackups.remove(backup.id);
         await this.fetchData();
     }
 
@@ -123,8 +166,10 @@ class ProfileEditDialog extends React.Component<any, ProfileEditDialogStates> {
     private async fetchData() {
         const vm = await IoC.get(ProfileViewModel);
         const profileList = await vm.getProfileList();
+        const backups = await ProfileBackups.list();
         this.setState({
-            profileList: profileList
+            profileList: profileList,
+            backups,
         })
     }
 
@@ -218,6 +263,31 @@ class ProfileEditDialog extends React.Component<any, ProfileEditDialogStates> {
                           }
                     />
                 </Card>
+                {(this.state.backups?.length ?? 0) > 0 &&
+                    <Card size={"small"} style={{marginTop: 8}}
+                          title={<Tooltip title={t("profile.backupsHelp")}>{t("profile.backupsTitle")}</Tooltip>}>
+                        <List size="small"
+                              dataSource={this.state.backups}
+                              renderItem={backup => (
+                                  <List.Item actions={[
+                                      <Tooltip key="restore" title={t("profile.restoreBackup")}>
+                                          <Button type="text" size="small" icon={<RollbackOutlined/>}
+                                                  onClick={() => void this.handleRestoreBackup(backup)}/>
+                                      </Tooltip>,
+                                      <Tooltip key="delete" title={t("Delete")}>
+                                          <Button type="text" size="small" danger icon={<DeleteOutlined/>}
+                                                  onClick={() => void this.handleDeleteBackup(backup)}/>
+                                      </Tooltip>,
+                                  ]}>
+                                      <Flex vertical>
+                                          <span>{backup.name}</span>
+                                          <Typography.Text type="secondary" style={{fontSize: 12}}>
+                                              {t("profile.backupInfo", {count: backup.mods.length, when: new Date(backup.time).toLocaleString()})}
+                                          </Typography.Text>
+                                      </Flex>
+                                  </List.Item>
+                              )}/>
+                    </Card>}
             </Modal>
         );
     }

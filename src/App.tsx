@@ -28,6 +28,7 @@ import {ConfigManageDialog} from "@/dialogs/ConfigManageDialog";
 import {MintImportDialog} from "@/dialogs/MintImportDialog";
 import {useFileDrop} from "@/hooks/useFileDrop";
 import {ModDescriptions} from "@/services/ModDescriptions";
+import {DeleteConfirm} from "@/services/DeleteConfirm";
 import {ModListAppearance} from "@/services/ModListAppearance";
 import {FolderColorDialog} from "@/dialogs/FolderColorDialog";
 import {IconPickerDialog} from "@/dialogs/IconPickerDialog";
@@ -118,6 +119,7 @@ const AppContent = () => {
                 console.log('[App] Core initialization complete');
                 logStartup().catch(console.error);
                 ModDescriptions.init().catch(console.error);
+                DeleteConfirm.init().catch(console.error);
                 ModListAppearance.init().catch(console.error);
                 Backups.startAuto();
                 UsageStats.start().catch(console.error);

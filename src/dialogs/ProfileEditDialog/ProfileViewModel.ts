@@ -5,6 +5,8 @@ import type {ProfileData} from "@/storage/dao/ProfileDAO.ts";
 import { ProfileService } from "@/services/ProfileService";
 import { IoC } from "@/core/IoC";
 import {logActivity} from "@/services/ActivityLog";
+import {cleanupDeletedProfile, ProfileBackups} from "@/services/ProfileCleanup";
+import {StorageAPI} from "@/storage";
 
 /**
  * ProfileViewModel manages profile-level operations
@@ -127,7 +129,8 @@ export class ProfileViewModel {
         await logActivity('info', t("log.profile.created", {name}), undefined, 'profile');
     }
 
-    public async removeProfile(name: string): Promise<void> {
+    /** @param backup keep a backup of it first (restorable from the profile editor) */
+    public async removeProfile(name: string, backup = false): Promise<void> {
         const profileService = await this.getProfileService();
         const profileList = await profileService.getProfileList();
 
@@ -146,8 +149,16 @@ export class ProfileViewModel {
         const activeProfile = await profileService.getActiveProfileData();
         const wasActive = activeProfile.name === name;
 
+        if (backup && !(await ProfileBackups.create(targetProfile.id))) {
+            message.error(t("profile.backupFailed"));
+            return;
+        }
+        // its mods, for the downloads nothing else uses any more
+        const modIds = (await (await StorageAPI.getProfiles()).getProfileMods(targetProfile.id)).map(m => m.modId);
         await profileService.deleteProfile(targetProfile.id);
         await logActivity('info', t("log.profile.deleted", {name}), undefined, 'profile');
+        await cleanupDeletedProfile({id: targetProfile.id, name: targetProfile.displayName || name}, modIds)
+            .catch(e => console.warn('[profiles] cleanup after delete failed', e));
 
         if (wasActive) {
             const remainingProfiles = profileList.filter(p => p !== name);

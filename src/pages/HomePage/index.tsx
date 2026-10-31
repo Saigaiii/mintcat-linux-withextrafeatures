@@ -48,7 +48,7 @@ import {ModSourceType} from "@/models/mod/types";
 import {MODCAT_PLATFORM} from "@/apis/modcat";
 import {NEXUSMODS_PLATFORM} from "@/apis/nexusmods";
 import {TreeView} from "./TreeView.tsx";
-import {findNode, folderKeysInOrder, modsWithin, pickedFolders, topmost, withSubfolders} from "./FolderOps";
+import {findNode, folderKeysInOrder, modsWithin, pickedFolders, soloPlan, topmost, withSubfolders} from "./FolderOps";
 import {AppInitializer} from "@/core/AppInitializer";
 import {IoC} from "@/core/IoC.ts";
 import { taskQueueAPI } from "tauri-plugin-task-queue";
@@ -75,6 +75,8 @@ import { openMintImport } from "@/dialogs/MintImportDialog";
 import { ModDescriptions } from "@/services/ModDescriptions";
 import { ConflictService } from "@/services/ConflictService";
 import { openConflictReport } from "@/components/ConflictDetails";
+import { confirmDelete, DeleteConfirm } from "@/services/DeleteConfirm";
+import { removeProfileLeftovers } from "@/services/ProfileCleanup";
 import { ConflictActions } from "@/services/ConflictActions";
 import type { SuggestedAction } from "@/services/ConflictInsights";
 import { getInternalAssetPaths, type InternalAssetGame } from "@/services/InternalAssetService";
@@ -111,6 +113,8 @@ interface ModListPageState {
     deployState?: DeployState;
     /** The profile whose mods the game has, when it isn't the active one */
     deployedOtherProfile?: string;
+    /** The game has the mods of a profile that was deleted since */
+    deployedDeletedProfile?: boolean;
     /** "Only these folders on" is in effect: which folders, since when (the banner offers the way back) */
     solo?: { folders: string[]; time: number } | null;
     /** Deploying from the toolbar right now */
@@ -228,7 +232,14 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 compressModPak,
                 assetPaths
             );
-            const hasUnsaved = !savedHash || currentHash !== savedHash || currentHash !== installedHash;
+            // A profile never deployed itself whose list is exactly what the game has (a copy of
+            // the deployed profile, say) counts as deployed
+            let saved = savedHash;
+            if (!saved && installedHash && currentHash === installedHash) {
+                saved = currentHash;
+                await profileVM.setActiveProfileInstallHash(currentHash).catch(() => undefined);
+            }
+            const hasUnsaved = !saved || currentHash !== saved || currentHash !== installedHash;
             const lastDeploy = await DeployLog.last(activeGame?.name ?? "drg");
             // The game can lose the mods without MINTCAT knowing (a game update, "Verify integrity
             // of game files", another tool): look for MINTCAT's mod pak
@@ -247,7 +258,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 ? (lastDeploy?.uninstalled ? "uninstalled" : "notDeployed")
                 : hasUnsaved ? "pending" : missing ? "missing" : "deployed";
             // Why the button says what it says, in the log file (only when that changes)
-            const why = `${deployState} current=${currentHash} saved=${savedHash || "-"} installed=${installedHash || "-"}`;
+            const why = `${deployState} current=${currentHash} saved=${saved || "-"} installed=${installedHash || "-"}`;
             if (why !== this.lastDeployState) {
                 this.lastDeployState = why;
                 console.info(`[deploy-state] ${why} (${enabledMods.length} enabled)`);
@@ -259,9 +270,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 : lastDeploy.profile !== activeName);
             const deployedOtherProfile = deployState === "pending" && lastDeploy && !lastDeploy.uninstalled
                 && lastDeploy.profile && otherProfile ? lastDeploy.profile : undefined;
+            const deployedDeletedProfile = deployState === "pending" && !!lastDeploy?.profileDeleted && !lastDeploy.uninstalled;
             const solo = await this.readSolo(activeProfile.id!);
             if (run !== this.unsavedRun) return;
-            this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, lastDeploy,
+            this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, deployedDeletedProfile, lastDeploy,
                 solo: solo ? {folders: solo.folders, time: solo.time} : null });
         } catch (e) {
             console.warn('[HomePage] refreshUnsavedState failed', e);
@@ -432,9 +444,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
             return;
         }
 
-        const confirm = await MessageBox.confirm({
+        const count = this.getBulkOpKeys().filter(k => this.extractModIdFromKey(k) !== null).length;
+        const confirm = await confirmDelete({
             title: t("Delete Mods"),
-            content: t("dialog.confirmDeleteSelectedMods"),
+            content: t("deleteConfirm.mods", {count}),
         });
 
         if (confirm) {
@@ -593,6 +606,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
             : state === "notDeployed" ? t("deploy.button.notDeployedHelp")
             : state === "missing" ? t("deploy.button.missingHelp")
             : otherProfile ? t("deploy.button.otherProfileHelp", {profile: otherProfile, when})
+            : this.state.deployedDeletedProfile ? t("deploy.button.deletedProfileHelp", {when})
             : t("deploy.button.pendingHelp");
         // the button's color presets, plus App.css for the Dark theme (which greys plain buttons)
         const look: { label: string; icon: React.ReactNode; color: "green" | "primary" | "danger"; variant: "outlined" | "solid" } = {
@@ -1492,7 +1506,10 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const ask = mods.length
             ? t(one ? "folders.deleteAskOne" : "folders.deleteAskMany", {name: names[0], folders: top.length, count: mods.length, sub: subText})
             : t(one ? "folders.deleteAskEmptyOne" : "folders.deleteAskEmptyMany", {name: names[0], folders: top.length, sub: subText});
-        const choice = await MessageBox.choose({
+        // With "Ask before deleting" off, folders with nothing in them go right away; folders
+        // with mods still ask whether the mods go too (there's no safe guess)
+        const instant = !(await DeleteConfirm.enabled()) && mods.length === 0 && subfolders === 0 && canDeleteAll;
+        const choice = instant ? "all" : await MessageBox.choose({
             title: one ? t("Delete Group") : t("folders.deleteTitleMany", {count: top.length}),
             content: React.createElement("div", null,
                 React.createElement("div", null, ask),
@@ -1580,9 +1597,13 @@ export class HomePage extends BasePage<any, ModListPageState> {
             enabled: [...(before?.enabled ?? []), ...added.filter(m => m.enabled !== false).map(m => m.modId!)],
             all: [...(before?.all ?? []), ...added.map(m => m.modId!)],
         };
+        // In the kept folders, mods that were off before stay off
+        const {on, off} = soloPlan(everyMod, keep as Set<number>, new Set(snapshot.enabled));
+        if (!everyMod.some(m => keep.has(m.modId) && snapshot.enabled.includes(m.modId!))) {
+            message.warning(t("folders.onlyAllOff"));
+            return;
+        }
         await (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id), JSON.stringify(snapshot));
-        const on = everyMod.filter(m => keep.has(m.modId)).map(m => m.modId!);
-        const off = everyMod.filter(m => !keep.has(m.modId)).map(m => m.modId!);
         const vm = await IoC.get(HomeViewModel);
         await vm.batchSetModEnabled(on, true, false);
         await vm.batchSetModEnabled(off, false, false);
@@ -1601,7 +1622,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const profile = await (await StorageAPI.getProfiles()).getActiveProfile();
         if (!profile?.id) return;
         const snapshot = await this.readSolo(profile.id);
-        const forget = async () => (await StorageAPI.getSettings()).setValue(this.soloKey(profile.id!), "");
+        // gone from the settings, not just emptied
+        const forget = async () => (await StorageAPI.getSettings()).deleteValue(this.soloKey(profile.id!));
         if (snapshot && restore) {
             const full = await this.treeViewRef.current?.fullTree();
             // keep the way back until it has been used
@@ -1865,11 +1887,15 @@ export class HomePage extends BasePage<any, ModListPageState> {
                         await this.updateTreeView();
                     }).show();
                 break;
-            case "delete":
+            case "delete": {
+                const mod = await this.getModById(id);
+                const name = mod?.displayName || mod?.originalName || `#${id}`;
+                if (!(await confirmDelete({title: t("deleteConfirm.modTitle"), content: t("deleteConfirm.mod", {name})}))) break;
                 await vm.removeMod(id);
                 shouldUpdateTree = true;
                 shouldUpdateCount = true;
                 break;
+            }
             case "copy_link":
                 await this.handleCopyLink(id);
                 break;
@@ -1919,6 +1945,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
         if (!AppInitializer.isCoreReady()) {
             await AppInitializer.initializeCore();
         }
+        // settings left by profiles deleted with older versions
+        void removeProfileLeftovers().catch(e => console.warn('[profiles] leftover cleanup failed', e));
 
         // Pre-initialize UI ViewModels (optional but recommended for better UX)
         await IoC.get(TreeViewModel);
