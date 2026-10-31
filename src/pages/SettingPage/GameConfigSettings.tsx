@@ -211,7 +211,7 @@ export function GameConfigCard() {
 
     const setReadOnly = async (file: ConfigFile, readonly: boolean) => {
         try {
-            await GameConfigFiles.setReadOnly(file.path, readonly);
+            await GameConfigFiles.setReadOnly(file.path, readonly, true);
             message.success(t(readonly ? "gameConfig.lockedNow" : "gameConfig.unlockedNow", {name: file.name}));
         } catch (e) {
             message.error(errorText(e));

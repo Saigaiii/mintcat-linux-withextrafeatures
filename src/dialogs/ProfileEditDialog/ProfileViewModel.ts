@@ -4,6 +4,7 @@ import {ProfileTreeItem} from "@/storage/db/Schema.ts";
 import type {ProfileData} from "@/storage/dao/ProfileDAO.ts";
 import { ProfileService } from "@/services/ProfileService";
 import { IoC } from "@/core/IoC";
+import {logActivity} from "@/services/ActivityLog";
 
 /**
  * ProfileViewModel manages profile-level operations
@@ -67,6 +68,7 @@ export class ProfileViewModel {
     public async setActiveProfile(profileName: string): Promise<void> {
         const profileService = await this.getProfileService();
         await profileService.setActiveProfile(profileName);
+        await logActivity('info', t("log.profile.switched", {name: profileName}), undefined, 'profile');
     }
 
     public async getActiveProfileLastUpdate(): Promise<number> {
@@ -122,7 +124,7 @@ export class ProfileViewModel {
             userId: activeProfile.userId,
             isActive: isFirstProfile
         });
-
+        await logActivity('info', t("log.profile.created", {name}), undefined, 'profile');
     }
 
     public async removeProfile(name: string): Promise<void> {
@@ -145,6 +147,7 @@ export class ProfileViewModel {
         const wasActive = activeProfile.name === name;
 
         await profileService.deleteProfile(targetProfile.id);
+        await logActivity('info', t("log.profile.deleted", {name}), undefined, 'profile');
 
         if (wasActive) {
             const remainingProfiles = profileList.filter(p => p !== name);
@@ -167,6 +170,7 @@ export class ProfileViewModel {
         const profileData = await profileService.getActiveProfileData();
         if (profileData.name === oldName) {
             await profileService.renameProfile(profileData.id!, newName);
+            await logActivity('info', t("log.profile.renamed", {from: oldName, to: newName}), undefined, 'profile');
         }
 
     }
@@ -202,6 +206,7 @@ export class ProfileViewModel {
 
         const treeService = profileService.getTreeService();
         await treeService.duplicateProfileTree(sourceProfile.id, newProfile.id);
+        await logActivity('info', t("log.profile.copied", {from: sourceName, to: newName}), undefined, 'profile');
 
     }
 

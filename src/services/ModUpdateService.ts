@@ -1,4 +1,4 @@
-import {logActivity} from "@/services/ActivityLog";
+import {logActivity, nameList} from "@/services/ActivityLog";
 import { t } from "i18next";
 import { exists, stat, remove } from "@tauri-apps/plugin-fs";
 import { emitEvent } from "@/events";
@@ -269,6 +269,17 @@ export class ModUpdateService {
         );
 
         const successCount = mods.length - errors.length;
+        // Each download in the Log: which ones came in, and why any didn't
+        const failedIds = new Set(errors.map(e => e.item.modId));
+        const done = modsToDownload.filter(m => !failedIds.has(m.modId));
+        if (done.length) {
+            await logActivity('success', t("log.download.done", {count: done.length}),
+                nameList(done.map(m => `${m.displayName}${m.version?.currentVersion ? ` (${m.version.currentVersion})` : ""}`)), 'download');
+        }
+        for (const e of errors) {
+            await logActivity('error', t("log.download.failed", {name: e.item.displayName,
+                reason: e.error instanceof Error ? e.error.message : String(e.error)}), e.item.url || undefined, 'download');
+        }
 
         if (errors.length > 0) {
             await StatusBar.error(

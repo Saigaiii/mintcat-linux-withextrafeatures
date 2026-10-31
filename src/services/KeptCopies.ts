@@ -10,6 +10,8 @@ import {exists, readDir, remove, stat} from "@tauri-apps/plugin-fs";
 import {replacedFilesFolder} from "@/services/ModSettingsFiles";
 import {getBackupPath} from "@/apis/mintcat/cloudBackup";
 import {GameConfigFiles} from "@/services/GameConfigFiles";
+import {t} from "i18next";
+import {logActivity} from "@/services/ActivityLog";
 
 export interface CopiesInfo {
     /** Folder (settings copies) or file (database copy) */
@@ -66,12 +68,14 @@ export const KeptCopies = {
         const dir = await GameConfigFiles.backupsFolder();
         if (!dir.replace(/[\\/]+$/, "").endsWith("config-backups")) throw new Error(`unexpected folder ${dir}`);
         if (await exists(dir)) await remove(dir, {recursive: true});
+        await logActivity('info', t("log.kept.deletedConfig"), dir, 'files');
     },
 
     async deleteSettingsCopies(): Promise<void> {
         const dir = await replacedFilesFolder();
         if (!dir.replace(/[\\/]+$/, "").endsWith("mod-settings-backups")) throw new Error(`unexpected folder ${dir}`);
         if (await exists(dir)) await remove(dir, {recursive: true});
+        await logActivity('info', t("log.kept.deletedSettings"), dir, 'files');
     },
 
     /** The database the last restore replaced */
@@ -98,5 +102,6 @@ export const KeptCopies = {
         for (const suffix of DB_SUFFIXES) {
             if (await exists(base + suffix)) await remove(base + suffix);
         }
+        await logActivity('info', t("log.kept.deletedDatabase"), base, 'files');
     },
 };

@@ -41,6 +41,7 @@ import {ConflictService, type ModConflictSummary} from "@/services/ConflictServi
 import {ModConflictDetails} from "@/components/ConflictDetails";
 import {useInstallOrder, useShowLocalPaths} from "@/services/ListDisplay";
 import {RepositoryUpdates} from "@/services/RepositoryUpdates";
+import {logActivity} from "@/services/ActivityLog";
 
 const {useToken} = theme;
 
@@ -569,6 +570,9 @@ function ModTreeViewVersionSelect({nodeData}) {
                     nodeData.profileModId,
                     isLatestVersion ? "" : newVersion
                 );
+                await logActivity('info', isLatestVersion
+                    ? t("log.list.versionNewest", {name: String(nodeData.title ?? ""), version: newVersion})
+                    : t("log.list.versionPinned", {name: String(nodeData.title ?? ""), version: newVersion}), undefined, 'list');
             }
 
             const modItem = await getModById(nodeData.modId);

@@ -281,6 +281,28 @@ body::before {
     color: var(--ant-color-primary) !important;
 }
 
+/* Deploy (Save Changes): orange "Deploy" with changes the game doesn't have, green "Deployed",
+   red when none of the mods are in the game (uninstalled, never deployed, or gone) */
+.deploy-btn {
+    font-weight: 600;
+    padding-inline: 10px;
+    /* the same width for Deploy, Deploying… and Deployed, so the toolbar doesn't jump */
+    min-width: 122px;
+}
+
+/* Its colors win over the Dark theme's rule that makes every plain button grey */
+.ant-btn.deploy-btn.deploy-btn-deployed.deploy-btn-deployed:not(.ant-btn-primary),
+.ant-btn.deploy-btn.deploy-btn-deployed.deploy-btn-deployed:not(.ant-btn-primary):hover {
+    color: #52c41a !important;
+    border-color: #52c41a !important;
+}
+
+.ant-btn.deploy-btn.deploy-btn-off.deploy-btn-off:not(.ant-btn-primary),
+.ant-btn.deploy-btn.deploy-btn-off.deploy-btn-off:not(.ant-btn-primary):hover {
+    color: #ff4d4f !important;
+    border-color: #ff4d4f !important;
+}
+
 .home-footer-bar {
     border-top: 1px solid #eee;
     padding: 2px 10px 0 10px;

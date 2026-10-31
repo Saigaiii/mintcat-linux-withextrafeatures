@@ -10,6 +10,7 @@ import TitleBar from "@/components/TitleBar.tsx";
 import StatusBar from "@/components/StatusBar.tsx";
 import LogPanel from "@/components/LogPanel";
 import {initActivityLog} from "@/services/ActivityLog";
+import {logStartup} from "@/services/StartupLog";
 import {RepositoryUpdates} from "@/services/RepositoryUpdates";
 import MenuBar, {MenuPage} from "@/components/MenuBar.tsx";
 import UpdateDialog from "@/dialogs/UpdateDialog.tsx";
@@ -115,6 +116,7 @@ const AppContent = () => {
         AppInitializer.initializeCore()
             .then(async () => {
                 console.log('[App] Core initialization complete');
+                logStartup().catch(console.error);
                 ModDescriptions.init().catch(console.error);
                 ModListAppearance.init().catch(console.error);
                 Backups.startAuto();

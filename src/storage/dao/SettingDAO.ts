@@ -14,6 +14,32 @@ import {
 
 const INTEGRATOR_COMPRESS_MOD_PAK_KEY = 'integrator.compressModPak';
 
+/**
+ * Settings whose changes go to the Log: "value" shows the old and new value, "changed" only
+ * says it changed (long values, or ones that may hold a password like a proxy address).
+ * Internal bookkeeping (hashes, caches, links) isn't logged.
+ */
+const LOGGED_SETTINGS: Record<string, 'value' | 'changed'> = {
+    language: 'value',
+    guiTheme: 'value',
+    cachePath: 'value',
+    configPath: 'value',
+    clipboardMonitor: 'value',
+    releaseChannel: 'value',
+    'network.proxy': 'changed',
+    'network.server_mode': 'value',
+    'network.mintcat_proxy_mode': 'value',
+    [INTEGRATOR_COMPRESS_MOD_PAK_KEY]: 'value',
+    ue4ss: 'value',
+    ue4ssVersion: 'value',
+    'ui.showAdvancedSettings': 'value',
+    'ui.modDescriptionOnHover': 'value',
+    'privacy.usageStats': 'value',
+    'ui.titleBarLook': 'changed',
+    'ui.systemIcon': 'changed',
+    customModRepositories: 'changed',
+};
+
 
 export interface SettingData {
     id?: number;
@@ -133,6 +159,8 @@ export class SettingDAO {
     }
 
     public async setValue(name: string, value: string): Promise<void> {
+        const logged = LOGGED_SETTINGS[name];
+        const before = logged ? await this.getValue(name).catch(() => "") : "";
         try {
             const db = await getDb();
             await db.insert(settings).values({
@@ -145,6 +173,12 @@ export class SettingDAO {
                     updatedAt: new Date(),
                 }
             });
+            if (logged && before !== value) {
+                const {logActivity} = await import("@/services/ActivityLog");
+                const {t} = await import("i18next");
+                await logActivity('info', t("log.settings.changed", {name}),
+                    logged === 'value' ? `${before || "—"} → ${value || "—"}` : undefined, 'settings');
+            }
         } catch (error) {
             console.error(`设置值失败 [名称: ${name}]:`, error);
             throw error;

@@ -11,6 +11,8 @@ import {invoke} from "@tauri-apps/api/core";
 import {appDataDir, join} from "@tauri-apps/api/path";
 import {copyFile, exists, mkdir, readDir, readFile, remove, stat, writeFile} from "@tauri-apps/plugin-fs";
 import {StorageAPI} from "@/storage";
+import {t} from "i18next";
+import {logActivity} from "@/services/ActivityLog";
 
 export type ConfigFolderKind = "prefix" | "game";
 
@@ -253,14 +255,19 @@ export const GameConfigFiles = {
         if (readonly) await GameConfigFiles.setReadOnly(file.path, false);
         try {
             await writeFile(file.path, encodeConfig(text, like));
+        } catch (error) {
+            await logActivity('error', t("log.config.saveFailed", {name: file.name, reason: error instanceof Error ? error.message : String(error)}), file.path, 'config');
+            throw error;
         } finally {
             if (readonly) await GameConfigFiles.setReadOnly(file.path, true);
         }
+        await logActivity('success', t(there ? "log.config.saved" : "log.config.created", {name: file.name}), file.path, 'config');
         await GameConfigFiles.prune(store, file.name).catch(e => console.warn("[GameConfig] prune failed", e));
     },
 
-    async setReadOnly(path: string, readonly: boolean): Promise<void> {
+    async setReadOnly(path: string, readonly: boolean, log = false): Promise<void> {
         await invoke("file_set_readonly", {path, readonly});
+        if (log) await logActivity('info', t(readonly ? "log.config.locked" : "log.config.unlocked", {name: path.split(/[\\/]/).pop() ?? path}), path, 'config');
     },
 
     /** Earlier versions of a file, newest first */

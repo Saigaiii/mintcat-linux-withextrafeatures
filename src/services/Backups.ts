@@ -17,6 +17,8 @@ import {appCacheDir, appDataDir, configDir, dirname, join} from "@tauri-apps/api
 import {copyFile, exists, mkdir, readDir, remove, stat} from "@tauri-apps/plugin-fs";
 import {getVersion} from "@tauri-apps/api/app";
 import {StorageAPI} from "@/storage";
+import {t} from "i18next";
+import {logActivity} from "@/services/ActivityLog";
 import {initDb, snapshotDatabase} from "@/storage/db/Client";
 import {ModSourceType} from "@/models/mod/types";
 import {BuildInfo} from "@/buildInfo";
@@ -246,6 +248,7 @@ export const Rclone = {
         if (result.code !== 0) {
             // a cancelled or failed sign-in leaves a half-made remote behind
             await forget();
+            await logActivity('warning', t("log.backup.connectFailed", {provider, reason: rcloneError(result).message}), undefined, 'backup');
             if (/couldn't find backend/i.test(result.stderr)) {
                 throw new Error(`This rclone has no ${provider} support. Install the full rclone (rclone.org/install) or use a synced folder.`);
             }
@@ -255,8 +258,10 @@ export const Rclone = {
         const check = await rclone(["lsjson", `${name}:`, "--dirs-only", "--max-depth", "1"], 90);
         if (check.code !== 0) {
             await forget();
+            await logActivity('error', t("log.backup.connectFailed", {provider, reason: rcloneError(check).message}), undefined, 'backup');
             throw rcloneError(check);
         }
+        await logActivity('success', t("log.backup.connected", {provider, name}), undefined, 'backup');
     },
 
     async cancel(runId: string): Promise<void> {
@@ -406,21 +411,27 @@ export const Backups = {
         if (busy) throw new Error("A backup is already running.");
         busy = true;
         notify();
+        const where = cfg.destination === "folder" ? cfg.folder : `rclone ${cfg.remote}`;
         try {
             const name = Backups.newBackupName(opts.note, opts.auto);
+            let size: number;
             if (cfg.destination === "folder") {
-                const dest = await join(cfg.folder, name);
-                const size = await Backups.writeZip(dest, {...opts, cfg});
-                return parseBackupName(name, size)!;
+                size = await Backups.writeZip(await join(cfg.folder, name), {...opts, cfg});
+            } else {
+                const local = await join(await appCacheDir(), "backup-work", name);
+                size = await Backups.writeZip(local, {...opts, cfg});
+                try {
+                    await rcloneOk(["copyto", local, remoteFile(cfg, name)], 1800);
+                } finally {
+                    await remove(local).catch(() => undefined);
+                }
             }
-            const local = await join(await appCacheDir(), "backup-work", name);
-            const size = await Backups.writeZip(local, {...opts, cfg});
-            try {
-                await rcloneOk(["copyto", local, remoteFile(cfg, name)], 1800);
-            } finally {
-                await remove(local).catch(() => undefined);
-            }
+            await logActivity('success', t(opts.auto ? "log.backup.createdAuto" : "log.backup.created",
+                {name, size: `${(size / 1048576).toFixed(1)} MB`}), where, 'backup');
             return parseBackupName(name, size)!;
+        } catch (error) {
+            await logActivity('error', t("log.backup.createFailed", {reason: error instanceof Error ? error.message : String(error)}), where, 'backup');
+            throw error;
         } finally {
             busy = false;
             notify();
@@ -490,6 +501,7 @@ export const Backups = {
         } else {
             await rcloneOk(["deletefile", remoteFile(cfg, entry.name)], 120);
         }
+        await logActivity('info', t("log.backup.deleted", {name: entry.name}), undefined, 'backup');
     },
 
     /** Remove automatic backups beyond the newest `keepAuto` (manual backups are kept) */
@@ -505,6 +517,7 @@ export const Backups = {
                 console.warn("[Backups] could not remove an old automatic backup", entry.name, e);
             }
         }
+        if (removed) await logActivity('info', t("log.backup.pruned", {count: removed, keep}), undefined, 'backup');
         return removed;
     },
 
@@ -596,6 +609,14 @@ export const Backups = {
             }
             result.database = true;
         }
+        await logActivity('success', t("log.backup.restored", {
+            name: plan.zipPath.split(/[\\/]/).pop() ?? plan.zipPath,
+            what: [
+                result.database ? t("log.backup.restoredDatabase") : "",
+                result.settings ? t("log.backup.restoredSettings", {count: result.settings}) : "",
+                result.localMods ? t("log.backup.restoredMods", {count: result.localMods}) : "",
+            ].filter(Boolean).join(", ") || "—",
+        }), result.elsewhere, 'backup');
         return result;
     },
 

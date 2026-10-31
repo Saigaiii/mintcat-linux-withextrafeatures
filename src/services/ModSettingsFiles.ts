@@ -8,6 +8,8 @@ import {invoke} from "@tauri-apps/api/core";
 import {appDataDir, dirname, join} from "@tauri-apps/api/path";
 import {copyFile, exists, mkdir, readDir, stat} from "@tauri-apps/plugin-fs";
 import {StorageAPI} from "@/storage";
+import {t} from "i18next";
+import {logActivity, nameList} from "@/services/ActivityLog";
 
 export interface SettingsFile {
     /** Path below SaveGames, forward slashes */
@@ -208,6 +210,8 @@ export async function applyImport(source: ImportSource, target: string, rels: st
     for (const {dest, mtime} of copied) {
         if (mtime > 0) await invoke("file_set_mtime", {path: dest, mtimeMs: Math.round(mtime)}).catch(() => undefined);
     }
+    await logActivity('success', t("log.settings.imported", {count: chosen.size, from: source.path}), nameList([...chosen]), 'settings-files');
+    if (savedTo) await logActivity('info', t("log.settings.replacedKept"), savedTo, 'settings-files');
     return {count: chosen.size, savedTo};
 }
 
@@ -226,5 +230,6 @@ export async function exportZip(dest: string, files: LocalSettingsFile[]): Promi
             ...kept.map(f => ({name: SETTINGS_ZIP_PREFIX + f.rel, source: f.path})),
         ],
     });
+    await logActivity('success', t("log.settings.exported", {count: kept.length}), dest, 'settings-files');
     return kept.length;
 }

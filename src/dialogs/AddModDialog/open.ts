@@ -405,8 +405,11 @@ async function onClipboardChange(text: string, again: boolean = false) {
         return;
     }
     if (again && await allInList(links, paths)) {
+        console.info("[Clipboard] copied again, but already in the list:", text);
         return;
     }
+    await logActivity('info', t(again ? "log.clipboard.copiedAgain" : "log.clipboard.copied", {count: links.length + paths.length}),
+        [...links, ...paths].join(" · "), 'clipboard');
 
     const addModType = links.length > 0 ? AddModType.ONLINE : AddModType.LOCAL;
     openWindow(addModType, 0, links.join("\n"), undefined, paths).then();

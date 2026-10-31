@@ -7,6 +7,7 @@ import {Button, ColorPicker, Flex, Modal, Typography} from "antd";
 import {FolderOutlined} from "@ant-design/icons";
 import {t} from "i18next";
 import {COLOR_PRESETS, ModListAppearance, readableTextOn} from "@/services/ModListAppearance";
+import {logActivity} from "@/services/ActivityLog";
 
 export function FolderColorDialog() {
     const version = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
@@ -23,6 +24,7 @@ export function FolderColorDialog() {
 
     const apply = async (value: string | null) => {
         await ModListAppearance.setFolderColor(editing.key, value);
+        await logActivity('info', value ? t("log.list.folderColor", {name: editing.name, color: value}) : t("log.list.folderColorRemoved", {name: editing.name}), undefined, 'list');
         ModListAppearance.closeFolderColor();
     };
 

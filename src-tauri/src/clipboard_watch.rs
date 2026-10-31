@@ -15,6 +15,20 @@ static EMPTIED: Mutex<Option<Instant>> = Mutex::new(None);
 const RESTORE_WINDOW: Duration = Duration::from_millis(1500);
 static WATCHING: AtomicBool = AtomicBool::new(false);
 static STARTED: AtomicBool = AtomicBool::new(false);
+/** 0: none, 1: Wayland, 2: X11 */
+static MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// How the clipboard is watched, for the Log
+pub fn mode() -> &'static str {
+    if !WATCHING.load(Ordering::SeqCst) {
+        return "off";
+    }
+    match MODE.load(Ordering::SeqCst) {
+        1 => "Wayland data-control",
+        2 => "X11 XFixes",
+        _ => "off",
+    }
+}
 
 /// Starts watching in the background (once); without a way to watch, nothing happens
 pub fn start() {
@@ -74,6 +88,7 @@ mod linux {
         use wl_clipboard_rs::paste::Seat;
         use wl_clipboard_rs::watch::{ClipboardEvent, ClipboardType, Watcher};
         let mut watcher = Watcher::new(ClipboardType::Regular, Seat::Unspecified).map_err(|e| e.to_string())?;
+        super::MODE.store(1, Ordering::SeqCst);
         WATCHING.store(true, Ordering::SeqCst);
         loop {
             match watcher.next_event() {
@@ -108,6 +123,7 @@ mod linux {
         )
         .map_err(|e| err(&e))?;
         conn.flush().map_err(|e| err(&e))?;
+        super::MODE.store(2, Ordering::SeqCst);
         WATCHING.store(true, Ordering::SeqCst);
         loop {
             match conn.wait_for_event() {

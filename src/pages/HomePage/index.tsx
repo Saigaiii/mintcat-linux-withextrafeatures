@@ -13,7 +13,9 @@ import {
     DeleteOutlined,
     EditOutlined, FieldTimeOutlined, LoadingOutlined, MinusSquareOutlined, PauseCircleOutlined, PlayCircleOutlined,
     PlusCircleOutlined, SaveOutlined, SortAscendingOutlined, SortDescendingOutlined, SyncOutlined, FolderOpenOutlined, ImportOutlined,
-    UnorderedListOutlined, WarningOutlined, FolderOutlined, ColumnHeightOutlined, VerticalAlignMiddleOutlined
+    UnorderedListOutlined, WarningOutlined, FolderOutlined, ColumnHeightOutlined, VerticalAlignMiddleOutlined,
+    StopOutlined, WarningFilled,
+    CheckCircleFilled, CloudUploadOutlined
 } from "@ant-design/icons";
 import * as checkbox from "antd/es/checkbox";
 
@@ -62,7 +64,8 @@ import { flattenTreeModIds, sortByDisplayOrder } from "@/utils/ModDisplayOrder";
 import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
 import { folderPaths, rememberOpen, restoreOpen } from "./FolderOpenState";
 import { RepositoryUpdates } from "@/services/RepositoryUpdates";
-import { logActivity } from "@/services/ActivityLog";
+import { logActivity, nameList } from "@/services/ActivityLog";
+import { DeployLog, type DeployRecord } from "@/services/DeployLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
 import { UpdateReviewDialog } from "@/dialogs/UpdateReviewDialog";
 import { defaultSaveLocation } from "@/utils/SaveLocation";
@@ -76,6 +79,8 @@ import { isUe4ssEnabled } from "@/utils/Ue4ssSetting";
 import { perfMark, perfUntilPainted } from "@/utils/perfTrace";
 import { fileNameOf, findMovedSiblings, localModPath, parentDir, relocateLocalMod } from "@/services/LocalModRelocation";
 
+
+type DeployState = "deployed" | "pending" | "uninstalled" | "notDeployed" | "missing";
 
 interface ModListPageState {
     profileOptions?: SelectProps['options'];
@@ -95,6 +100,18 @@ interface ModListPageState {
     totalCount?: number;
     sortOrder?: string;
     hasUnsavedChanges?: boolean;
+    /**
+     * Whether the game has the list: deployed (it does), pending (changes it doesn't have, or
+     * another profile is in the game), uninstalled (taken out with Uninstall), notDeployed (never
+     * deployed), missing (deployed, but the mods are gone from the game folder)
+     */
+    deployState?: DeployState;
+    /** The profile whose mods the game has, when it isn't the active one */
+    deployedOtherProfile?: string;
+    /** Deploying from the toolbar right now */
+    deploying?: boolean;
+    /** The game's last deploy (for the deploy button's tooltip) */
+    lastDeploy?: DeployRecord | null;
     /** Local mod being linked to a repository post (Link to Pak Hub post…) */
     repoLinkMod?: CompleteModData | null;
     /** Repository updates waiting for the user to pick what to replace */
@@ -156,6 +173,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
      * 2. the active game's currently installed hash
      * This keeps the "unsaved" state correct after switching profiles.
      */
+    private lastDeployState = "";
+
     private async refreshUnsavedState(): Promise<void> {
         try {
             const profileVM = await IoC.get(ProfileViewModel);
@@ -199,9 +218,31 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 assetPaths
             );
             const hasUnsaved = !savedHash || currentHash !== savedHash || currentHash !== installedHash;
-            if (this.state.hasUnsavedChanges !== hasUnsaved) {
-                this.setState({ hasUnsavedChanges: hasUnsaved });
+            const lastDeploy = await DeployLog.last(activeGame?.name ?? "drg");
+            // The game can lose the mods without MINTCAT knowing (a game update, "Verify integrity
+            // of game files", another tool): look for MINTCAT's mod pak
+            let missing = false;
+            if (!hasUnsaved && enabledMods.length > 0 && activeGame?.installPath) {
+                try {
+                    missing = (await IntegrateApi.checkInstalled(activeGame.installPath, 0)) !== "mintcat_installed";
+                } catch {
+                    missing = false;
+                }
             }
+            // nothing of MINTCAT's in the game: uninstalled, or never deployed
+            const deployState: DeployState = !installedHash
+                ? (lastDeploy?.uninstalled ? "uninstalled" : "notDeployed")
+                : hasUnsaved ? "pending" : missing ? "missing" : "deployed";
+            // Why the button says what it says, in the log file (only when that changes)
+            const why = `${deployState} current=${currentHash} saved=${savedHash || "-"} installed=${installedHash || "-"}`;
+            if (why !== this.lastDeployState) {
+                this.lastDeployState = why;
+                console.info(`[deploy-state] ${why} (${enabledMods.length} enabled)`);
+            }
+            const activeName = activeProfile.displayName || activeProfile.name;
+            const deployedOtherProfile = deployState === "pending" && lastDeploy && !lastDeploy.uninstalled
+                && lastDeploy.profile && lastDeploy.profile !== activeName ? lastDeploy.profile : undefined;
+            this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, lastDeploy });
         } catch (e) {
             console.warn('[HomePage] refreshUnsavedState failed', e);
         }
@@ -487,6 +528,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     @autoBind
     private async onMenuBarSaveChangesClick() {
+        if (this.state.deploying) return;
+        this.setState({deploying: true});
         try {
             // Submit installation task
             const taskId = await IntegrateApi.installMods();
@@ -510,7 +553,51 @@ export class HomePage extends BasePage<any, ModListPageState> {
         } catch (error) {
             console.error('[HomePage] Installation failed:', error);
             message.error(t("Installation Failed"));
+        } finally {
+            this.setState({deploying: false});
+            await this.refreshUnsavedState();
         }
+    }
+
+    /**
+     * The deploy (Save Changes) button says whether the game has the list, by color: green
+     * "Deployed" when it does, orange "Deploy" when the list has changes the game doesn't have,
+     * red when none of MINTCAT's mods are in the game (uninstalled, never deployed, or gone)
+     */
+    private renderDeployButton() {
+        const {deploying, lastDeploy} = this.state;
+        const state: DeployState = this.state.deployState ?? "pending";
+        const when = lastDeploy?.time ? new Date(lastDeploy.time).toLocaleString() : "";
+        const otherProfile = this.state.deployedOtherProfile;
+        const title = deploying ? t("deploy.button.deployingHelp")
+            : state === "deployed" ? (when ? t("deploy.button.doneHelp", {when, count: lastDeploy?.mods.length ?? 0}) : t("deploy.button.doneHelpNoTime"))
+            : state === "uninstalled" ? (when ? t("deploy.button.uninstalledHelp", {when}) : t("deploy.button.uninstalledHelpNoTime"))
+            : state === "notDeployed" ? t("deploy.button.notDeployedHelp")
+            : state === "missing" ? t("deploy.button.missingHelp")
+            : otherProfile ? t("deploy.button.otherProfileHelp", {profile: otherProfile, when})
+            : t("deploy.button.pendingHelp");
+        // the button's color presets, plus App.css for the Dark theme (which greys plain buttons)
+        const look: { label: string; icon: React.ReactNode; color: "green" | "primary" | "danger"; variant: "outlined" | "solid" } = {
+            deployed: {label: t("deploy.button.deployed"), icon: <CheckCircleFilled/>, color: "green" as const, variant: "outlined" as const},
+            pending: {label: t("deploy.button.deploy"), icon: <CloudUploadOutlined/>, color: "primary" as const, variant: "solid" as const},
+            uninstalled: {label: t("deploy.button.uninstalled"), icon: <StopOutlined/>, color: "danger" as const, variant: "outlined" as const},
+            notDeployed: {label: t("deploy.button.notDeployed"), icon: <StopOutlined/>, color: "danger" as const, variant: "outlined" as const},
+            missing: {label: t("deploy.button.missing"), icon: <WarningFilled/>, color: "danger" as const, variant: "outlined" as const},
+        }[state];
+        return (
+            <Tooltip title={title}>
+                <Button {...(state === "pending" && !deploying
+                            // type="primary" (not the color preset): the themes style that class
+                            ? {type: "primary" as const}
+                            : {color: deploying ? "primary" as const : look.color, variant: deploying ? "outlined" as const : look.variant})}
+                        loading={deploying}
+                        icon={deploying ? undefined : look.icon}
+                        className={`tour-step-save deploy-btn deploy-btn-${deploying ? "busy" : state}${!deploying && look.color === "danger" ? " deploy-btn-off" : ""}`}
+                        onClick={this.onMenuBarSaveChangesClick}>
+                    {deploying ? t("deploy.button.deploying") : look.label}
+                </Button>
+            </Tooltip>
+        );
     }
 
     @autoBind
@@ -591,9 +678,12 @@ export class HomePage extends BasePage<any, ModListPageState> {
         try {
             const result = await taskQueueAPI.waitForTaskCompletion(taskId);
             if (result.status !== 'completed') {
+                await logActivity('warning', t("log.conflicts.notFinished", {status: result.status}), result.error || undefined, 'conflicts');
                 return;
             }
-            if (ConflictService.getAllConflicts().length === 0) {
+            const found = ConflictService.getAllConflicts().length;
+            await logActivity(found ? 'warning' : 'success', found ? t("log.conflicts.found", {count: found}) : t("log.conflicts.none"), undefined, 'conflicts');
+            if (found === 0) {
                 message.success(t("No conflicts detected"));
                 return;
             }
@@ -626,10 +716,16 @@ export class HomePage extends BasePage<any, ModListPageState> {
             if (!confirm) {
                 return;
             }
-            await IntegrateApi.uninstallMods();
+            if (await IntegrateApi.uninstallMods()) {
+                // the game has none of the list now: the deploy button says so
+                const profileVM = await IoC.get(ProfileViewModel);
+                await profileVM.setActiveGameInstalledHash("");
+            }
         } catch (error) {
             console.error('[HomePage] Uninstall mods failed:', error);
             message.error(t("Uninstall Failed"));
+        } finally {
+            await this.refreshUnsavedState();
         }
     }
 
@@ -638,6 +734,11 @@ export class HomePage extends BasePage<any, ModListPageState> {
         this.setState({ sortOrder: order });
         const vm = await IoC.get(TreeViewModel);
         await vm.sortMods(order);
+        const sortLabels: Record<string, string> = {
+            name_asc: 'Name A → Z', name_desc: 'Name Z → A', time_desc: 'Time New → Old',
+            time_asc: 'Time Old → New', verified_asc: 'Verified → Sandbox', verified_desc: 'Sandbox → Verified',
+        };
+        await logActivity('info', t("log.list.sorted", { order: sortLabels[order] ? t(sortLabels[order]) : order }), undefined, 'list');
         await this.updateTreeView();
     }
 
@@ -933,6 +1034,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
             const folderName = this.getFolderChoices().find(f => f.key === targetFolderKey)?.label ?? "";
             message.success(t("multi.moved", { count: picked.length, folder: folderName }));
+            await logActivity('info', t("log.list.movedToFolder", { count: picked.length, folder: folderName }),
+                nameList(picked.map(n => String(n.title ?? n.key))), 'list');
             if (!(this.state.expandedKeys ?? []).map(String).includes(targetFolderKey)) {
                 this.setState((state) => ({ expandedKeys: [...(state.expandedKeys ?? []), targetFolderKey] }));
             }
@@ -1438,6 +1541,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 for (let i = 0; i < reordered.length; i++) {
                     await profilesApi.updateProfileMod(reordered[i].id!, { sortOrder: i });
                 }
+                const pinned = await (await StorageAPI.getMods()).getModById(id);
+                await logActivity('info', t("log.list.pinned", { name: pinned?.displayName ?? `#${id}` }), undefined, 'list');
                 shouldUpdateTree = true;
             }
                 break;
@@ -1640,11 +1745,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                         <Space separator={<Divider orientation="vertical"/>} size={2}
                                className="home-menu-bar">
                             <Typography.Link>
-                                <Tooltip title={t("Save Changes")}>
-                                    <Button icon={<SaveOutlined/>} type={"text"}
-                                            className={`tour-step-save ${this.state.hasUnsavedChanges ? "save-btn-unsaved" : ""}`}
-                                            onClick={this.onMenuBarSaveChangesClick}/>
-                                </Tooltip>
+                                {this.renderDeployButton()}
                                 <Tooltip title={t("Uninstall Mods From Game")}>
                                     <Button icon={<DeleteOutlined/>} type={"text"}
                                             onClick={this.onMenuBarUninstallModsClick}/>

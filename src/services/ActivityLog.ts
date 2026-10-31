@@ -67,6 +67,9 @@ function notify() {
 
 function push(level: ActivityLevel, message: string, detail: string | undefined, source: string) {
     if (!message) return;
+    // The same problem reported twice at once (e.g. an install error that is also an app error)
+    const last = entries[entries.length - 1];
+    if (last && last.message === message && last.level === level && Date.now() - last.time < 3000) return;
     entries.push({id: nextId++, time: Date.now(), level, message, detail, source});
     if (entries.length > MAX_ENTRIES) {
         entries.splice(0, entries.length - MAX_ENTRIES);
@@ -105,6 +108,12 @@ function translateStatusMessage(msg: unknown): { text: string; level: ActivityLe
  */
 export async function logActivity(level: ActivityLevel, message: string, detail?: string, source = 'app'): Promise<void> {
     await emitEvent('activity-log', {level, message, detail, source});
+}
+
+/** Names for a log line: the first few, then how many more */
+export function nameList(names: string[], max = 12): string {
+    if (names.length <= max) return names.join(", ");
+    return `${names.slice(0, max).join(", ")} ${t("log.andMore", {count: names.length - max})}`;
 }
 
 /** Local timestamp as YYYY-MM-DD HH:MM:SS */
@@ -207,5 +216,26 @@ export async function initActivityLog(): Promise<void> {
     await listenEvent('install-error', (msg) => {
         const {text} = translateStatusMessage(msg);
         push('error', text, undefined, 'install');
+    });
+
+    await listenEvent('app-error', (msg) => {
+        const {text} = translateStatusMessage(msg);
+        push('error', text, undefined, 'app');
+    });
+
+    // Errors nothing else caught: what went wrong, and where (the first line of the stack)
+    const where = (stack: unknown): string | undefined =>
+        typeof stack === 'string' ? stack.split('\n').map(l => l.trim()).find(l => l.startsWith('at ') || l.includes('@')) : undefined;
+    const benign = (text: string) => /ResizeObserver loop|Script error\.?$/i.test(text);
+    window.addEventListener('error', (event) => {
+        const text = event.error instanceof Error ? event.error.message : String(event.message ?? '');
+        if (!text || benign(text)) return;
+        push('error', t("log.app.uncaught", {message: text}), where(event.error?.stack), 'app');
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+        const reason = event.reason;
+        const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : JSON.stringify(reason ?? '');
+        if (!text || benign(text)) return;
+        push('error', t("log.app.uncaught", {message: text}), where(reason?.stack), 'app');
     });
 }

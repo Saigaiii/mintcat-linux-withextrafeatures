@@ -14,6 +14,7 @@ import {dragAndDrop} from "./DragAndDropTree";
 import {DragAutoScroll} from "./DragAutoScroll";
 import {gatherAround, groupSpread, leavesInOrder, moveGroupToPosition, moveToPosition} from "./TreeMoves";
 import {MessageBox} from "@/components/MessageBox";
+import {logActivity, nameList} from "@/services/ActivityLog";
 import {t} from "i18next";
 import { IoC } from "@/core/IoC";
 
@@ -27,6 +28,53 @@ function folderPathOf(nodes: any[] | undefined, key: string, path: string[] = []
         if (found) return found;
     }
     return null;
+}
+
+/** A node's name for the Log */
+function titleOf(nodes: any[] | undefined, key: string): string {
+    for (const node of nodes ?? []) {
+        if (String(node.key) === key) return String(node.title ?? key);
+        const found = titleOf(node.children, key);
+        if (found !== key) return found;
+    }
+    return key;
+}
+
+/** Where a node ended up, for the Log: its install position (mods) and its folder */
+async function logMove(treeAfter: any[], key: string, group: string[] | null, how: string): Promise<void> {
+    try {
+        const isMod = key.startsWith("mod-");
+        const raw = isMod ? folderOfLeaf(treeAfter, key) : (folderPathOf(treeAfter, key) ?? "").split("/").slice(0, -1).join("/");
+        const folder = raw === "\u0000" ? "" : raw;
+        const where = folder || t("log.list.topLevel");
+        if (group && group.length > 1) {
+            const order = leavesInOrder(treeAfter).map(l => String(l.node.key));
+            const position = order.indexOf(group[0]) + 1;
+            await logActivity('info', t("log.list.movedGroup", {count: group.length, position, folder: where, how}),
+                nameList(group.map(k => titleOf(treeAfter, k))), 'list');
+        } else if (isMod) {
+            const position = leavesInOrder(treeAfter).findIndex(l => String(l.node.key) === key) + 1;
+            await logActivity('info', t("log.list.moved", {name: titleOf(treeAfter, key), position, folder: where, how}), undefined, 'list');
+        } else {
+            await logActivity('info', t("log.list.folderMoved", {name: titleOf(treeAfter, key), folder: where, how}), undefined, 'list');
+        }
+    } catch (e) {
+        console.warn("[TreeView] could not log the move", e);
+    }
+}
+
+/** The folder path a mod is in ("" at the top level) */
+function folderOfLeaf(nodes: any[] | undefined, key: string, path: string[] = []): string {
+    for (const node of nodes ?? []) {
+        if (node.isLeaf) {
+            if (String(node.key) === key) return path.join("/");
+            continue;
+        }
+        const here = node.key === 'root' ? path : [...path, String(node.title ?? "")];
+        const found = folderOfLeaf(node.children, key, here);
+        if (found !== "\u0000") return found;
+    }
+    return "\u0000";
 }
 
 /** A moved folder keeps its color (and its subfolders' colors) at its new place */
@@ -299,6 +347,7 @@ export class TreeView extends React.Component<TreeViewProps> {
 
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
             await carryFolderColors(sourceKey, pathBefore, dragTreeData);
+            await logMove(dragTreeData, sourceKey, null, t("log.list.howMenu"));
 
             if (this.props.onModListChange) {
                 this.props.onModListChange();
@@ -347,6 +396,7 @@ export class TreeView extends React.Component<TreeViewProps> {
             if (missing.length > 0) this.props.onTreeNodeExpand?.([...expanded, ...missing]);
 
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
+            await logMove(treeData, sourceKey, group, t("log.list.howNumber"));
             this.props.onModListChange?.();
             await this.props.onUpdateTreeView?.();
             // Highlight it, unless mods are being picked with checkboxes: a plain select would
@@ -411,6 +461,7 @@ export class TreeView extends React.Component<TreeViewProps> {
             const profileVM = await IoC.get(ProfileViewModel);
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
             await carryFolderColors(dragKey, pathBefore, dragTreeData);
+            await logMove(dragTreeData, dragKey, group, t("log.list.howDrag"));
 
             if (this.props.onModListChange) {
                 this.props.onModListChange();

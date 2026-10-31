@@ -16,6 +16,8 @@ import {
 import type {ModInfo} from "@/apis/modio/ModInfo.ts";
 import {NexusModsApi, showNexusModsApiKeyRequiredMessage} from "@/apis/nexusmods";
 import {cleanupRemovedRepositoryMod} from "@/services/RepositoryModCleanup";
+import {logActivity, nameList} from "@/services/ActivityLog";
+import {StorageAPI} from "@/storage";
 
 /**
  * HomeViewModel handles mod operations and business logic
@@ -26,6 +28,16 @@ export class HomeViewModel extends BaseViewModel {
 
     constructor() {
         super();
+    }
+
+    /** A mod's name for the Log */
+    private async modName(modId: number): Promise<string> {
+        try {
+            const mod = await (await StorageAPI.getMods()).getModById(modId);
+            return mod?.displayName || mod?.originalName || `#${modId}`;
+        } catch {
+            return `#${modId}`;
+        }
     }
 
     public async addModFromUrl(url: string, groupId: number): Promise<AddModFromUrlResult> {
@@ -72,13 +84,17 @@ export class HomeViewModel extends BaseViewModel {
     }
 
     public async removeMod(id: number): Promise<void> {
+        const name = await this.modName(id);
         await this.homeService.removeModFromActiveProfile(id);
+        await logActivity('info', t("log.list.removed", {name}), undefined, 'list');
         // Mods downloaded from a repository (Pak Hub): delete the downloaded file too
         await cleanupRemovedRepositoryMod(id);
     }
 
     public async setDisplayName(id: number, name: string): Promise<void> {
+        const before = await this.modName(id);
         await this.homeService.updateModDisplayName(id, name);
+        await logActivity('info', t("log.list.renamed", {from: before, to: name}), undefined, 'list');
     }
     /**
      * 设置 mod 启用状态
@@ -88,6 +104,7 @@ export class HomeViewModel extends BaseViewModel {
      */
     public async setModEnabled(modId: number, enable: boolean, profileModId?: number): Promise<void> {
         await this.homeService.setModEnabled(modId, enable, profileModId);
+        await logActivity('info', t(enable ? "log.list.enabled" : "log.list.disabled", {name: await this.modName(modId)}), undefined, 'list');
     }
 
     /**
@@ -95,6 +112,8 @@ export class HomeViewModel extends BaseViewModel {
      */
     public async batchSetModEnabled(modIds: number[], enable: boolean): Promise<void> {
         await this.homeService.batchSetModEnabled(modIds, enable);
+        const names = await Promise.all(modIds.map(id => this.modName(id)));
+        await logActivity('info', t(enable ? "log.list.enabledMany" : "log.list.disabledMany", {count: modIds.length}), nameList(names), 'list');
     }
 
     public async setModUsedVersion(profileModId: number, version: string): Promise<void> {
@@ -103,7 +122,9 @@ export class HomeViewModel extends BaseViewModel {
 
     public async setGroupName(id: number, name: string): Promise<void> {
         const treeViewModel = await IoC.get(TreeViewModel);
+        const before = treeViewModel.getGroupName(id);
         await treeViewModel.setGroupName(id, name);
+        await logActivity('info', t("log.list.folderRenamed", {from: (await before) ?? "", to: name}), undefined, 'list');
     }
 
     public async getGroupName(id: number): Promise<string | undefined> {
@@ -113,14 +134,18 @@ export class HomeViewModel extends BaseViewModel {
 
     public async addGroup(parentGroupId: number, groupName: string): Promise<void> {
         await this.homeService.addGroup(parentGroupId, groupName);
+        const parent = parentGroupId ? await this.getGroupName(parentGroupId) : undefined;
+        await logActivity('info', parent ? t("log.list.subfolderAdded", {name: groupName, parent}) : t("log.list.folderAdded", {name: groupName}), undefined, 'list');
     }
 
     public async removeGroup(groupId: number): Promise<void> {
         console.log(`[HomeViewModel] removeGroup called with groupId=${groupId}`);
 
 
+        const name = await this.getGroupName(groupId).catch(() => undefined);
         try {
             await this.homeService.removeGroup(groupId);
+            await logActivity('info', t("log.list.folderDeleted", {name: name ?? `#${groupId}`}), undefined, 'list');
         } catch (error) {
             if (error instanceof LastGroupCannotDeleteError) {
                 throw error;
@@ -135,7 +160,9 @@ export class HomeViewModel extends BaseViewModel {
      * @returns 清理的 mod 数量
      */
     public async cleanMissingLocalMods(): Promise<number> {
-        return await this.homeService.cleanMissingLocalMods();
+        const count = await this.homeService.cleanMissingLocalMods();
+        await logActivity('info', t("log.list.cleanedMissing", {count}), undefined, 'list');
+        return count;
     }
 
     /**

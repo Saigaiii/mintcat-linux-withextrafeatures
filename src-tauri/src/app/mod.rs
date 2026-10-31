@@ -144,6 +144,7 @@ pub fn run() {
             backup::file_set_mtime,
             backup::file_set_readonly,
             crate::clipboard_watch::clipboard_change_count,
+            crate::system_info::session_summary,
             system_icon::system_icon_status,
             system_icon::system_icon_apply,
             system_icon::system_icon_restore,
