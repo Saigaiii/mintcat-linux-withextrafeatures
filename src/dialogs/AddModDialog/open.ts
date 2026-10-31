@@ -23,10 +23,17 @@ import {BackendRuntimeApi} from "@/apis/BackendRuntimeApi";
 import {isModArchivePath, parseLocalPathLine, splitLines} from "@/utils/LocalModPaths";
 import {ActivityLog, logActivity} from "@/services/ActivityLog";
 import {DialogProfileService} from "@/services/DialogProfileService.ts";
-import {byFolder, folderFor} from "@/dialogs/AddModDialog/ItemFolders";
+import {folderFor} from "@/dialogs/AddModDialog/ItemFolders";
 import type {ModInfo} from "@/apis/modio/ModInfo.ts";
 
 let windowInstance: WebviewWindow;
+/** Stops listening for the open window's OK/Cancel (a closed window must not leave its listeners) */
+let stopListening: (() => void) | null = null;
+
+function forgetDialogListeners() {
+    stopListening?.();
+    stopListening = null;
+}
 
 type AddModDialogInitData = {
     text: string;
@@ -79,10 +86,16 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
 
     windowInstance.once('tauri://destroyed', () => {
         windowInstance = null;
+        // closed with the window's X (or after OK/Cancel): the next window listens anew
+        forgetDialogListeners();
     }).then();
 
+    // listeners of an earlier window that never answered (shouldn't happen, but never twice)
+    forgetDialogListeners();
+    let unlistenClose: (() => void) | undefined;
     // ✅ 使用 onceEvent 自动管理类型安全
-    await onceEvent('add-mod-dialog-ok', async (result) => {
+    const unlistenOk = await onceEvent('add-mod-dialog-ok', async (result) => {
+        unlistenClose?.();
         // result.list 去重
         result.list = [...new Set(result.list)];
         let addProblems = 0;
@@ -91,6 +104,8 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
         // Each mod goes to the folder picked for it, else the dialog's folder
         const folders = await folderLabels();
         const validIds = new Set(folders.keys());
+        // what the list had before, to tell mods this add brought in as another mod's dependency
+        const before = await listedModIds();
         const place = (own: Record<string, number> | undefined) => (item: string): Placed => {
             const folderId = folderFor(own, item, result.groupId, validIds);
             return {folderId, folderName: folders.get(folderId)};
@@ -101,13 +116,9 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
                 const modInfoList: ModInfo[] = result.modInfoList ?? [];
                 if (modInfoList.length > 0) {
                     const folderOf = place(result.subscribedFolders);
-                    let existsCount = 0;
-                    let errorCount = 0;
-                    for (const [folderId, infos] of byFolder(modInfoList, m => folderOf(String(m.id)).folderId)) {
-                        const batchResult = await vm.addModsFromSubscribed(infos, folderId);
-                        existsCount += batchResult.existsCount;
-                        errorCount += batchResult.errorCount;
-                    }
+                    // one batch: every chosen mod goes in (to its folder) before any dependency
+                    const {existsCount, errorCount} = await vm.addModsFromSubscribed(
+                        modInfoList, result.groupId, m => folderOf(String(m.id)).folderId);
                     if (existsCount > 0) {
                         message.warning(t("Mod Already Exists") + ` (${existsCount} ${t("in current list")})`);
                     }
@@ -130,7 +141,7 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
                     outcomes.push(await addLocalMods(vm, localList, place(result.localFolders)));
                 }
                 if (onlineList.length > 0) {
-                    outcomes.push(await addOnlineMods(vm, onlineList, place(result.onlineFolders)));
+                    outcomes.push(await addOnlineMods(vm, onlineList, place(result.onlineFolders), before));
                 }
                 addProblems = outcomes.reduce((n, o) => n + o.problems, 0);
                 addExists = outcomes.reduce((n, o) => n + o.exists, 0);
@@ -157,14 +168,20 @@ export async function openWindow(addModType: string = AddModType.LOCAL,
             await onUpdated();
         }
 
-        await windowInstance.close();
+        // (already gone if closed with its X while adding)
+        await windowInstance?.close();
         windowInstance = null;
     });
 
-    await onceEvent('add-mod-dialog-close', async () => {
-        await windowInstance.close();
+    unlistenClose = await onceEvent('add-mod-dialog-close', async () => {
+        unlistenOk();
+        await windowInstance?.close();
         windowInstance = null;
     });
+    stopListening = () => {
+        unlistenOk();
+        unlistenClose?.();
+    };
 
 }
 
@@ -181,6 +198,44 @@ async function folderLabels(): Promise<Map<number, string>> {
     } catch (error) {
         console.warn('[AddModDialog] Could not read the folders', error);
         return new Map();
+    }
+}
+
+/** The active profile's listed mod ids */
+async function listedModIds(): Promise<{ profileId: number; ids: Set<number> } | null> {
+    try {
+        const profiles = await StorageAPI.getProfiles();
+        const profile = await profiles.getActiveProfile();
+        if (!profile?.id) return null;
+        return {profileId: profile.id, ids: new Set((await profiles.getProfileMods(profile.id)).map(m => m.modId))};
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * A link found "already in the list" although it wasn't before this add: another mod of the
+ * same add brought it in as a dependency, into that mod's folder. Put it where it was meant to go.
+ * True when the link's mod came in with this add.
+ */
+async function claimBroughtInMod(url: string, placed: Placed,
+                                 before: { profileId: number; ids: Set<number> } | null): Promise<boolean> {
+    if (!before) return false;
+    try {
+        const modsApi = await StorageAPI.getMods();
+        const nameId = ModioApi.parseModLinks(url);
+        const mod = (nameId ? await modsApi.getModByNameId(nameId, "Modio") : null) ?? await modsApi.getModByUrl(url);
+        if (!mod?.modId || before.ids.has(mod.modId)) return false;
+        const profiles = await StorageAPI.getProfiles();
+        const listed = await profiles.getProfileMod(before.profileId, mod.modId);
+        if (!listed?.id) return false;
+        if (listed.parentFolderId !== placed.folderId) {
+            await profiles.updateProfileMod(listed.id, {parentFolderId: placed.folderId});
+        }
+        return true;
+    } catch (error) {
+        console.warn('[AddModDialog] could not check where a dependency went', url, error);
+        return false;
     }
 }
 
@@ -236,9 +291,10 @@ async function addLocalMods(vm: HomeViewModel, list: string[], placeOf: (item: s
     return {problems, exists};
 }
 
-async function logLinkResult(url: string, r: AddModFromUrlResult | undefined, placed: Placed): Promise<'added' | 'exists' | 'problem'> {
+async function logLinkResult(url: string, r: AddModFromUrlResult | undefined, placed: Placed,
+                             before: { profileId: number; ids: Set<number> } | null = null): Promise<'added' | 'exists' | 'problem'> {
     const name = r?.modName || r?.mod?.displayName;
-    if (r?.status === "added") {
+    if (r?.status === "added" || (r?.status === "exists" && await claimBroughtInMod(url, placed, before))) {
         await logActivity('success', addedText(name || url, placed), url, 'add-mod');
         return 'added';
     }
@@ -264,7 +320,8 @@ async function logLinkResult(url: string, r: AddModFromUrlResult | undefined, pl
  * Add links, logging each outcome (added mod's name, already listed, not found, error).
  * @returns how many could not be added / were already listed
  */
-async function addOnlineMods(vm: HomeViewModel, list: string[], placeOf: (item: string) => Placed): Promise<AddOutcome> {
+async function addOnlineMods(vm: HomeViewModel, list: string[], placeOf: (item: string) => Placed,
+                             before: { profileId: number; ids: Set<number> } | null): Promise<AddOutcome> {
     const directAddList: string[] = [];
     const nexusWebviewList: Array<{ url: string; parsed: NexusModsParsedUrl }> = [];
 
@@ -292,7 +349,7 @@ async function addOnlineMods(vm: HomeViewModel, list: string[], placeOf: (item: 
                 try {
                     const placed = placeOf(item);
                     const r = await vm.addModFromUrl(item, placed.folderId);
-                    count(await logLinkResult(item, r, placed));
+                    count(await logLinkResult(item, r, placed, before));
                     return r;
                 } catch (error) {
                     problems++;
@@ -311,7 +368,7 @@ async function addOnlineMods(vm: HomeViewModel, list: string[], placeOf: (item: 
             // the folder picked for the link the user gave, not the download link found for it
             const placed = placeOf(item.url);
             const r = await vm.addModFromUrl(addModUrl, placed.folderId);
-            count(await logLinkResult(item.url, r, placed));
+            count(await logLinkResult(item.url, r, placed, before));
             results.push(r);
         } catch (error) {
             problems++;

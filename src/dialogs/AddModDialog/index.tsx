@@ -223,13 +223,18 @@ export class AddModDialog extends BasePage<any, AddModDialogStates> {
         // in mod-list order, subfolders labelled with their path
         const profileFolderList = await this.dialogProfileService.getActiveProfileFolderChoices();
 
-        this.setState({
-            groupOptions: profileFolderList.map((item) => {
-                return {
+        const ids = new Set(profileFolderList.map(f => f.id));
+        this.setState(prev => {
+            // folders deleted meanwhile: their mods go to the dialog's folder again
+            const overrides = prev.folderOverrides ?? {};
+            const kept = Object.fromEntries(Object.entries(overrides).filter(([, id]) => ids.has(id)));
+            return {
+                groupOptions: profileFolderList.map((item) => ({
                     label: item.label,
                     value: item.id,
-                }
-            }),
+                })),
+                ...(Object.keys(kept).length !== Object.keys(overrides).length ? {folderOverrides: kept} : {}),
+            };
         });
 
         // Return the folder list for immediate use (since setState is async)

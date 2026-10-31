@@ -8,6 +8,7 @@ import { ConflictService, ConflictModMeta, ModConflictResponse, ConflictAssetSum
 import { flattenTreeModIds, sortByDisplayOrder } from '@/utils/ModDisplayOrder';
 import { emitEvent } from '@/events';
 import { BackendRuntimeApi } from '@/apis/BackendRuntimeApi';
+import { loadCompleteMods } from '@/services/ModBatchLoad';
 
 /**
  * Check if a path is a valid unpacked mod directory
@@ -79,7 +80,6 @@ export class ModConflictCheckTask implements ITask {
 
         const profileVM = await IoC.get(ProfileViewModel);
         const profilesDAO = await StorageAPI.getProfiles();
-        const modsDAO = await StorageAPI.getMods();
         const gameDAO = await StorageAPI.getGames();
 
         const activeProfileData = await profileVM.getActiveProfileData();
@@ -121,13 +121,15 @@ export class ModConflictCheckTask implements ITask {
         const AUDIO_TAG = 'Audio';
         const AUDIO_DIRECT_COPY_MIN_SIZE = 10 * 1024 * 1024;
         
+        // all at once (4 queries instead of 4 per mod)
+        const loaded = new Map((await loadCompleteMods(enabledProfileMods.map(pm => pm.modId))).map(m => [m.modId, m]));
         for (let i = 0; i < enabledProfileMods.length; i++) {
             if (context.checkCancelled()) {
                 throw new Error('Task cancelled');
             }
 
             const pm = enabledProfileMods[i];
-            const modData = await modsDAO.getCompleteModData(pm.modId);
+            const modData = loaded.get(pm.modId);
             
             if (!modData) {
                 continue;

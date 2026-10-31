@@ -174,12 +174,16 @@ export const ModListAppearance = {
         await persist();
     },
 
-    /** Forget colors of folders no profile has any more (`keep`: color keys still in use) */
-    async keepOnlyFolderColors(keep: Set<string>): Promise<number> {
+    /**
+     * Forget colors of folders no profile has any more (`keep`: color keys still in use).
+     * With `prefix`, only keys starting with it are looked at (others, e.g. colors saved by
+     * older builds under "folder-12", are kept).
+     */
+    async keepOnlyFolderColors(keep: Set<string>, prefix?: string): Promise<number> {
         const folderColors: Record<string, string> = {};
         let removed = 0;
         for (const [key, color] of Object.entries(look.folderColors)) {
-            if (keep.has(key)) folderColors[key] = color;
+            if (keep.has(key) || (prefix && !key.startsWith(prefix))) folderColors[key] = color;
             else removed++;
         }
         if (removed === 0) return 0;

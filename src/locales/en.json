@@ -1237,6 +1237,7 @@
     "profile.deleteWithBackup": "Keep a backup, then delete",
     "profile.deleteNoBackup": "Delete",
     "profile.backupFailed": "Couldn't back up the profile, so it wasn't deleted.",
+    "profile.deleteFailed": "Couldn't delete the profile, so nothing of it was removed.",
     "profile.backupsTitle": "Backups of deleted profiles",
     "profile.backupsHelp": "Profiles you deleted with \"Keep a backup\". Restore makes one a profile again; Delete removes the backup for good.",
     "profile.backupInfo": "{{count}} mods · deleted {{when}}",

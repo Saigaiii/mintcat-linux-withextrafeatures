@@ -827,12 +827,13 @@ export class ModUpdateService {
     public static async checkLocalModCache(modItem: CompleteModData) {
         if (modItem.sourceType === ModSourceType.Local) {
             const cachePath = modItem.download?.cachePath || "";
-            const modsApi = await StorageAPI.getMods();
-
-            if (!await exists(cachePath)) {
+            const missing = !await exists(cachePath);
+            // Only when that changed: saving and redrawing every mod on each deploy is slow
+            if (modItem.status?.isLocalNotFound !== missing) {
+                const modsApi = await StorageAPI.getMods();
                 await modsApi.upsertModStatus({
                     modId: modItem.modId!,
-                    isLocalNotFound: true
+                    isLocalNotFound: missing
                 });
                 // Get updated mod data and emit event
                 const updatedMod = await modsApi.getCompleteModData(modItem.modId!);
@@ -842,22 +843,8 @@ export class ModUpdateService {
                         data: updatedMod
                     });
                 }
-                return false;
-            } else {
-                await modsApi.upsertModStatus({
-                    modId: modItem.modId!,
-                    isLocalNotFound: false
-                });
             }
-
-            // Get updated mod data and emit event
-            const updatedMod = await modsApi.getCompleteModData(modItem.modId!);
-            if (updatedMod) {
-                await emitEvent("mod-treeview-update", {
-                    modId: updatedMod.modId!,
-                    data: updatedMod
-                });
-            }
+            return !missing;
         }
         return true;
     }

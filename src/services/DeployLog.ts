@@ -74,12 +74,15 @@ export const DeployLog = {
      * A profile was deleted: the record of what's in the game stays (the mods are still
      * there until the next deploy or uninstall), but no longer names that profile
      */
-    async forgetProfile(profileId: number, name: string): Promise<void> {
+    async forgetProfile(profileId: number, name: string, game?: string): Promise<void> {
         const settings = await StorageAPI.getSettings();
         for (const setting of await settings.namesWithPrefix("deploy.last.")) {
             try {
                 const record = JSON.parse(await settings.getValue(setting)) as DeployRecord;
-                const matches = record.profileId !== undefined ? record.profileId === profileId : record.profile === name;
+                // records from older builds have only the name: same name in the same game
+                const matches = record.profileId !== undefined
+                    ? record.profileId === profileId
+                    : record.profile === name && (game === undefined || setting === key(game));
                 if (!matches || record.uninstalled) continue;
                 await settings.setValue(setting, JSON.stringify({...record, profile: "", profileId: undefined, profileDeleted: true}));
             } catch {

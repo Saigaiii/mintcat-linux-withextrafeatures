@@ -619,6 +619,23 @@ export class ProfileDAO {
         }
     }
 
+    /** Several mods out of a profile with one statement */
+    public async removeModsFromProfile(profileId: number, modIds: number[]): Promise<boolean> {
+        if (modIds.length === 0) return true;
+        try {
+            const db = await getDb();
+            await db.delete(profileMods)
+                .where(and(
+                    eq(profileMods.profileId, profileId),
+                    inArray(profileMods.modId, modIds)
+                ));
+            return true;
+        } catch (error) {
+            console.error(`从配置文件中移除模组失败 [配置ID: ${profileId}, ${modIds.length} mods]:`, error);
+            return false;
+        }
+    }
+
     public async removeModFromProfile(profileId: number, modId: number): Promise<boolean> {
         try {
             const db = await getDb();

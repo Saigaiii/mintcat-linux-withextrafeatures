@@ -40,7 +40,7 @@ import {emitEvent, listenEvent, type UnlistenFn} from "@/events";
 import {AddModType} from "@/dialogs/AddModDialog";
 import {SearchBox} from "@/pages/HomePage/SearchBox.tsx";
 import {StorageAPI} from "@/storage";
-import {cleanupRemovedRepositoryMod} from "@/services/RepositoryModCleanup";
+import {cleanupRemovedRepositoryMods} from "@/services/RepositoryModCleanup";
 import type {CompleteModData} from "@/storage/dao/ModDAO";
 import type {ProfileData, ProfileModData} from "@/storage/dao/ProfileDAO";
 import type {ProfileTreeItem} from "@/models/profile/ProfileTreeItem";
@@ -186,11 +186,34 @@ export class HomePage extends BasePage<any, ModListPageState> {
      * This keeps the "unsaved" state correct after switching profiles.
      */
     private lastDeployState = "";
-    /** Runs can overlap (many callers don't wait); only the latest one may update the button */
-    private unsavedRun = 0;
+    /** The check running now, if any */
+    private unsavedLoop: Promise<void> | null = null;
+    /** Something changed since the running check started: check once more after it */
+    private unsavedDirty = false;
 
-    private async refreshUnsavedState(): Promise<void> {
-        const run = ++this.unsavedRun;
+    /**
+     * One check at a time: asking while one runs means one more run afterwards (many quick
+     * changes, e.g. toggling mods fast, cost two runs instead of one each). Resolves once a run
+     * that started after this call has finished.
+     */
+    private refreshUnsavedState(): Promise<void> {
+        this.unsavedDirty = true;
+        if (!this.unsavedLoop) {
+            this.unsavedLoop = (async () => {
+                try {
+                    while (this.unsavedDirty) {
+                        this.unsavedDirty = false;
+                        await this.checkUnsavedState();
+                    }
+                } finally {
+                    this.unsavedLoop = null;
+                }
+            })();
+        }
+        return this.unsavedLoop;
+    }
+
+    private async checkUnsavedState(): Promise<void> {
         try {
             const profileVM = await IoC.get(ProfileViewModel);
             const savedHash = await profileVM.getActiveProfileInstallHash();
@@ -224,7 +247,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
             const gamesDAO = await StorageAPI.getGames();
             const activeGame = await gamesDAO.getActiveGame();
             const isRc = activeGame?.name?.toLowerCase() === 'rc';
-            const assetPaths = await getInternalAssetPaths(isRc ? 'rc' : 'drg', ue4ssEnabled);
+            // paths only: checking the zips themselves is the deploy's job (this runs after every change)
+            const assetPaths = await getInternalAssetPaths(isRc ? 'rc' : 'drg', ue4ssEnabled, {validate: false});
 
             const currentHash = await computeInstallManifestHash(
                 enabledMods,
@@ -272,7 +296,6 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 && lastDeploy.profile && otherProfile ? lastDeploy.profile : undefined;
             const deployedDeletedProfile = deployState === "pending" && !!lastDeploy?.profileDeleted && !lastDeploy.uninstalled;
             const solo = await this.readSolo(activeProfile.id!);
-            if (run !== this.unsavedRun) return;
             this.setState({ hasUnsavedChanges: deployState !== "deployed", deployState, deployedOtherProfile, deployedDeletedProfile, lastDeploy,
                 solo: solo ? {folders: solo.folders, time: solo.time} : null });
         } catch (e) {
@@ -487,9 +510,9 @@ export class HomePage extends BasePage<any, ModListPageState> {
         await emitEvent("mod-batch-enabled-change", { modIds, enabled: isEnable });
 
         clearPendingEnabled();
+        // (updateTreeView checks the Deploy button too)
         await this.updateTreeView();
         await this.updateCountLabel();
-        this.refreshUnsavedState();
     }
 
     @autoBind
@@ -569,7 +592,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
             const result = await taskQueueAPI.waitForTaskCompletion(taskId);
 
             if (result.status === 'completed') {
-                this.refreshUnsavedState();
+                // (the Deploy button is checked in finally)
                 message.success(t("Installation Finish"));
             } else if (result.status === 'failed') {
                 const baseError = t("Installation Failed");
@@ -1069,7 +1092,6 @@ export class HomePage extends BasePage<any, ModListPageState> {
                 this.setState((state) => ({ expandedKeys: [...(state.expandedKeys ?? []), targetFolderKey] }));
             }
             await this.updateTreeView();
-            this.refreshUnsavedState();
         } catch (error) {
             console.error("[HomePage] bulk move failed", error);
             message.error(t("multi.moveFailed", { reason: String(error) }));
@@ -1528,9 +1550,7 @@ export class HomePage extends BasePage<any, ModListPageState> {
                     await vm.removeGroup(id);
                 }
                 // like removing the mods one by one: files MINTCAT downloaded for them go too
-                for (const mod of mods) {
-                    if (mod.modId != null) await cleanupRemovedRepositoryMod(mod.modId);
-                }
+                await cleanupRemovedRepositoryMods(mods.filter(m => m.modId != null).map(m => m.modId!));
                 if (mods.length) {
                     await logActivity('info', t("log.list.folderModsRemoved", {count: mods.length}),
                         nameList(mods.map(m => String(m.title ?? m.key))), 'list');

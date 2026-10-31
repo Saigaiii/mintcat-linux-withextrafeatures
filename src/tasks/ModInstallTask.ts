@@ -5,6 +5,7 @@ import { ModUpdateService } from '@/services/ModUpdateService';
 import { IntegrateApi } from '@/apis/IntegrateApi';
 import type { CompleteModData } from '@/storage/dao/ModDAO';
 import { StorageAPI } from '@/storage';
+import {loadCompleteMods} from '@/services/ModBatchLoad';
 import { MessageBox } from '@/components/MessageBox';
 import { ForeignPaksConfirmContent } from '@/components/ForeignPaksConfirmContent';
 import React from 'react';
@@ -157,15 +158,8 @@ export class ModInstallTask implements ITask {
             game: activeGame?.displayName ?? activeGame?.name ?? "",
         }), drgPakPath, 'deploy');
 
-        // Get complete mod data for enabled mods
-        const modsDAO = await StorageAPI.getMods();
-        const enabledMods: CompleteModData[] = [];
-        for (const pm of enabledProfileMods) {
-            const modData = await modsDAO.getCompleteModData(pm.modId);
-            if (modData) {
-                enabledMods.push(modData);
-            }
-        }
+        // Get complete mod data for enabled mods (batched, in install order)
+        const enabledMods: CompleteModData[] = await loadCompleteMods(enabledProfileMods.map(pm => pm.modId));
 
         // Step 3: Check and update mods (parallel download)
         await context.setStep(t('Check Mod Updates'), 3, TOTAL_STEPS);
@@ -175,14 +169,11 @@ export class ModInstallTask implements ITask {
         if (onlineEnabledMods.length > 0) {
             await ModUpdateService.refreshOnlineMetadata(onlineEnabledMods, 3, { showStatus: false });
 
+            const refreshed = new Map((await loadCompleteMods(onlineEnabledMods.map(m => m.modId!))).map(m => [m.modId, m]));
             for (let i = 0; i < enabledMods.length; i++) {
-                if (!ModUpdateService.isOnlineMod(enabledMods[i])) {
-                    continue;
-                }
-
-                const refreshed = await modsDAO.getCompleteModData(enabledMods[i].modId!);
-                if (refreshed) {
-                    enabledMods[i] = refreshed;
+                const updated = refreshed.get(enabledMods[i].modId);
+                if (updated) {
+                    enabledMods[i] = updated;
                 }
             }
         }
@@ -236,21 +227,21 @@ export class ModInstallTask implements ITask {
                 throw new Error(`${t("Download Failed")}: ${failedNames}${reasonSuffix}`);
             }
 
-            // Refresh enabledMods from DB so subsequent steps use updated cache paths
-            for (let i = 0; i < enabledMods.length; i++) {
-                const modsDAO = await StorageAPI.getMods();
-                const updated = await modsDAO.getCompleteModData(enabledMods[i].modId!);
-                if (updated) {
-                    enabledMods[i] = updated;
-                }
+        }
+
+        // Refresh enabledMods from the database so the next steps use the current cache paths
+        // (downloads and the local-file check above update them)
+        const current = new Map((await loadCompleteMods(enabledMods.map(m => m.modId!))).map(m => [m.modId, m]));
+        for (let i = 0; i < enabledMods.length; i++) {
+            const updated = current.get(enabledMods[i].modId);
+            if (updated) {
+                enabledMods[i] = updated;
             }
         }
 
         // Verify all mods have cache paths after download
         for (const item of enabledMods) {
-            const modsDAO = await StorageAPI.getMods();
-            const updatedMod = await modsDAO.getCompleteModData(item.modId!);
-            const cachePath = updatedMod?.download?.cachePath || "";
+            const cachePath = current.get(item.modId)?.download?.cachePath || "";
             if (cachePath === "") {
                 throw new Error(`${t("File Not Found")}: ${item.url}`);
             }

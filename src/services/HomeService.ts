@@ -320,7 +320,8 @@ export class HomeService {
     /**
      * 批量导入 mod.io 订阅的 mod（使用已获取的 ModInfo，避免逐个请求 API）
      */
-    public async addModsFromSubscribed(modInfos: ModInfo[], groupId: number): Promise<BatchAddModResult> {
+    public async addModsFromSubscribed(modInfos: ModInfo[], groupId: number,
+                                       folderOf?: (modInfo: ModInfo) => number): Promise<BatchAddModResult> {
         const profile = await this.getActiveProfile();
         const modsApi = await StorageAPI.getMods();
         const profiles = await StorageAPI.getProfiles();
@@ -329,9 +330,13 @@ export class HomeService {
         let existsCount = 0;
         let errorCount = 0;
 
-        const depModIds: number[] = [];
+        // mod.io id → folder its dependencies go to (the folder of the mod needing them).
+        // Dependencies come after all chosen mods, so a chosen mod lands in its own folder
+        // even when another chosen mod needs it.
+        const depFolders = new Map<number, number>();
 
         for (const modInfo of modInfos) {
+            const modFolderId = folderOf?.(modInfo) ?? groupId;
             try {
                 const existingMod = await modsApi.getModByPlatformId(modInfo.id, "Modio");
                 if (existingMod) {
@@ -342,18 +347,18 @@ export class HomeService {
                         await this.addModToProfile({
                             profileId: profile.id!,
                             modId: existingMod.modId!,
-                            groupId,
+                            groupId: modFolderId,
                             usedVersion: "",
                         });
                         addedCount++;
                     }
                 } else {
-                    await ModService.addModFromModio(modInfo, profile.id!, groupId);
+                    await ModService.addModFromModio(modInfo, profile.id!, modFolderId);
                     addedCount++;
                 }
 
-                if (modInfo.dependencies) {
-                    depModIds.push(modInfo.id);
+                if (modInfo.dependencies && !depFolders.has(modInfo.id)) {
+                    depFolders.set(modInfo.id, modFolderId);
                 }
             } catch (e) {
                 console.error(`[addModsFromSubscribed] Failed to add mod ${modInfo.name}:`, e);
@@ -362,11 +367,10 @@ export class HomeService {
         }
 
         // 依赖去重后批量解析，低并发避免风控
-        const uniqueDepIds = [...new Set(depModIds)];
-        if (uniqueDepIds.length > 0) {
+        if (depFolders.size > 0) {
             await asyncPoolAll(
-                uniqueDepIds,
-                (depModId) => this.addModDependencies(depModId, groupId, profile.id!),
+                [...depFolders.entries()],
+                ([depModId, folderId]) => this.addModDependencies(depModId, folderId, profile.id!),
                 2
             );
         }
@@ -416,6 +420,16 @@ export class HomeService {
         const profile = await this.getActiveProfile();
         const profiles = await StorageAPI.getProfiles();
         await profiles.removeModFromProfile(profile.id!, modId);
+    }
+
+    /** Several mods out of the active profile's list in one go */
+    public async removeModsFromActiveProfile(modIds: number[]): Promise<void> {
+        if (modIds.length === 0) return;
+        const profile = await this.getActiveProfile();
+        const profiles = await StorageAPI.getProfiles();
+        if (!(await profiles.removeModsFromProfile(profile.id!, modIds))) {
+            throw new Error(`Could not remove ${modIds.length} mod(s) from the list`);
+        }
     }
 
     public async updateModDisplayName(modId: number, name: string): Promise<void> {

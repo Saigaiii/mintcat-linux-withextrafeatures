@@ -1237,6 +1237,7 @@
 	"profile.deleteWithBackup": "保留备份后删除",
 	"profile.deleteNoBackup": "删除",
 	"profile.backupFailed": "无法备份该配置，因此未删除。",
+	"profile.deleteFailed": "无法删除该配置，未移除任何内容。",
 	"profile.backupsTitle": "已删除配置的备份",
 	"profile.backupsHelp": "你选择“保留备份”后删除的配置。恢复会将其重新变为配置；删除会永久移除该备份。",
 	"profile.backupInfo": "{{count}} 个 Mod · 删除于 {{when}}",

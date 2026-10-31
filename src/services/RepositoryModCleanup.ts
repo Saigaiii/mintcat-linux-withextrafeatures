@@ -12,6 +12,7 @@ import {StorageAPI} from "@/storage";
 import {ModSourceType} from "@/models/mod/types";
 import {logActivity} from "@/services/ActivityLog";
 import {fileNameOf, localModPath, parentDir} from "@/services/LocalModRelocation";
+import {loadCompleteMods} from "@/services/ModBatchLoad";
 
 function normalize(p: string): string {
     return p.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -69,6 +70,25 @@ export async function deleteRepositoryFile(filePath: string): Promise<boolean> {
 }
 
 /**
+ * Several mods were removed: loads them in one go and looks further only at files MINTCAT
+ * downloaded from a repository. Returns how many downloaded files were deleted.
+ */
+export async function cleanupRemovedRepositoryMods(modIds: number[]): Promise<number> {
+    if (modIds.length === 0) return 0;
+    let deleted = 0;
+    try {
+        for (const mod of await loadCompleteMods([...new Set(modIds)])) {
+            if (mod.modId == null || mod.sourceType !== ModSourceType.Local) continue;
+            if (!await isRepositoryDownload(localModPath(mod))) continue;
+            if (await cleanupRemovedRepositoryMod(mod.modId)) deleted++;
+        }
+    } catch (error) {
+        console.warn('[RepositoryModCleanup] cleanup of removed mods failed', error);
+    }
+    return deleted;
+}
+
+/**
  * Call after a mod was removed from the active profile. Returns true when its downloaded
  * file was deleted.
  */
@@ -80,6 +100,9 @@ export async function cleanupRemovedRepositoryMod(modId: number): Promise<boolea
         const filePath = localModPath(mod);
         if (!await isRepositoryDownload(filePath)) return false;
         if (await usedByAnyProfile(modId)) return false;
+        // a backup of a deleted profile still has it (imported lazily: ProfileCleanup imports this file)
+        const {ProfileBackups} = await import("@/services/ProfileCleanup");
+        if ((await ProfileBackups.modIds()).has(modId)) return false;
 
         const deleted = await deleteRepositoryFile(filePath);
         await modsApi.deleteMod(modId);

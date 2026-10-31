@@ -149,15 +149,22 @@ export class ProfileViewModel {
         const activeProfile = await profileService.getActiveProfileData();
         const wasActive = activeProfile.name === name;
 
-        if (backup && !(await ProfileBackups.create(targetProfile.id))) {
+        const made = backup ? await ProfileBackups.create(targetProfile.id) : null;
+        if (backup && !made) {
             message.error(t("profile.backupFailed"));
             return;
         }
         // its mods, for the downloads nothing else uses any more
         const modIds = (await (await StorageAPI.getProfiles()).getProfileMods(targetProfile.id)).map(m => m.modId);
-        await profileService.deleteProfile(targetProfile.id);
+        if (!(await profileService.deleteProfile(targetProfile.id))) {
+            // still there: keep its settings, and the backup made of it isn't needed
+            if (made) await ProfileBackups.discard(made.id);
+            message.error(t("profile.deleteFailed"));
+            await logActivity('error', t("profile.deleteFailed"), name, 'profile');
+            return;
+        }
         await logActivity('info', t("log.profile.deleted", {name}), undefined, 'profile');
-        await cleanupDeletedProfile({id: targetProfile.id, name: targetProfile.displayName || name}, modIds)
+        await cleanupDeletedProfile({id: targetProfile.id, name: targetProfile.displayName || name, gameId: targetProfile.gameId}, modIds)
             .catch(e => console.warn('[profiles] cleanup after delete failed', e));
 
         if (wasActive) {

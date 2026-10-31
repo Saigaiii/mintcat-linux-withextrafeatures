@@ -261,6 +261,10 @@ export class AppInitializer {
         try {
             await applyMintcatApiRoutingFromSettings({
                 cachedProbeTimeoutMs: 1500,
+                // don't hold up the mod list (or the Add Mod window) for a network check
+                probeCached: false,
+                // the Add Mod window runs this too: re-probing every server each time it opens isn't needed
+                refreshInBackground: !window.location.hash.includes('add_mod_dialog'),
                 logPrefix: '[AppInitializer]',
             });
         } catch (error) {

@@ -563,9 +563,8 @@ pub fn check_mod_conflicts(
                     }
                 }
 
-                if !entry.1.contains(&file_path) {
-                    entry.1.push(file_path.clone());
-                }
+                // each path comes up once (map keys are unique)
+                entry.1.push(file_path.clone());
             }
         }
     }

@@ -14,7 +14,8 @@ export function ItemFolderSelect({folders, itemKey, width = 130}: {
 }) {
     if (!folders || folders.options.length < 2) return null;
     const own = folders.overrides[itemKey];
-    const hasOwn = own != null && own !== folders.defaultId;
+    // a folder deleted meanwhile no longer counts (the mod goes to the dialog's folder)
+    const hasOwn = own != null && own !== folders.defaultId && folders.options.some(o => o.value === own);
     const value = hasOwn ? own : folders.defaultId;
     const label = folders.options.find(o => o.value === value)?.label;
     return (

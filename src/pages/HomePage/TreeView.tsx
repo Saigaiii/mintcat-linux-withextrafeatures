@@ -365,12 +365,9 @@ export class TreeView extends React.Component<TreeViewProps> {
             await carryFolderColors(sourceKey, pathBefore, dragTreeData);
             await logMove(dragTreeData, sourceKey, null, t("log.list.howMenu"));
 
-            if (this.props.onModListChange) {
-                this.props.onModListChange();
-            }
-            if (this.props.onUpdateTreeView) {
-                await this.props.onUpdateTreeView();
-            }
+            // rebuilding the list checks the Deploy button too; only without it ask for that alone
+            if (this.props.onUpdateTreeView) await this.props.onUpdateTreeView();
+            else this.props.onModListChange?.();
         } catch (error) {
             console.error(`[TreeView] Error during move to folder:`, error);
         }
@@ -413,8 +410,9 @@ export class TreeView extends React.Component<TreeViewProps> {
 
             await profileVM.saveProfileTreeToDatabase(profileTreeItem);
             await logMove(treeData, sourceKey, group, how ?? t("log.list.howNumber"));
-            this.props.onModListChange?.();
-            await this.props.onUpdateTreeView?.();
+            // rebuilding the list checks the Deploy button too; only without it ask for that alone
+            if (this.props.onUpdateTreeView) await this.props.onUpdateTreeView();
+            else this.props.onModListChange?.();
             // Highlight it, unless mods are being picked with checkboxes: a plain select would
             // end that and drop the picked mods
             if (!this.props.isMultiSelect) this.props.onTreeNodeSelect?.([sourceKey]);
@@ -510,12 +508,9 @@ export class TreeView extends React.Component<TreeViewProps> {
             await carryFolderColors(dragKey, pathBefore, dragTreeData);
             await logMove(dragTreeData, dragKey, group, t("log.list.howDrag"));
 
-            if (this.props.onModListChange) {
-                this.props.onModListChange();
-            }
-            if (this.props.onUpdateTreeView) {
-                await this.props.onUpdateTreeView();
-            }
+            // rebuilding the list checks the Deploy button too; only without it ask for that alone
+            if (this.props.onUpdateTreeView) await this.props.onUpdateTreeView();
+            else this.props.onModListChange?.();
         } catch (error) {
             console.error(`[TreeView] Error during drag and drop:`, error);
         }
@@ -604,8 +599,9 @@ export class TreeView extends React.Component<TreeViewProps> {
             await ModListAppearance.renameFolderKey(FOLDER_COLOR_PREFIX + before, FOLDER_COLOR_PREFIX + after);
             renamed.push(before);
         }
-        this.props.onModListChange?.();
-        await this.props.onUpdateTreeView?.();
+        // rebuilding the list checks the Deploy button too; only without it ask for that alone
+        if (this.props.onUpdateTreeView) await this.props.onUpdateTreeView();
+        else this.props.onModListChange?.();
         return true;
     }
 

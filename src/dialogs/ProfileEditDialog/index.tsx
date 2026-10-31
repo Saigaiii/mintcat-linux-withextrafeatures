@@ -15,6 +15,8 @@ interface ProfileEditDialogStates {
     editingValue?: string;
     profileList?: string[];
     backups?: ProfileBackup[];
+    /** A backup is being restored or deleted (its buttons are off meanwhile) */
+    backupBusy?: string;
 }
 
 type InputCallback = (name: string) => void;
@@ -116,24 +118,39 @@ class ProfileEditDialog extends React.Component<any, ProfileEditDialogStates> {
     }
 
     private async handleRestoreBackup(backup: ProfileBackup) {
-        const result = await ProfileBackups.restore(backup.id);
-        if (!result) {
+        if (this.state.backupBusy) return;
+        this.setState({backupBusy: backup.id});
+        try {
+            const result = await ProfileBackups.restore(backup.id);
+            if (!result) {
+                message.error(t("profile.restoreFailed"));
+                return;
+            }
+            message.success(t("profile.restored", {name: result.name}));
+            if (result.missing > 0) message.warning(t("profile.restoredMissing", {count: result.missing}));
+        } catch (error) {
+            console.error('[profiles] restore failed', error);
             message.error(t("profile.restoreFailed"));
-            return;
+        } finally {
+            this.setState({backupBusy: undefined});
+            await this.fetchData();
         }
-        message.success(t("profile.restored", {name: result.name}));
-        if (result.missing > 0) message.warning(t("profile.restoredMissing", {count: result.missing}));
-        await this.fetchData();
     }
 
     private async handleDeleteBackup(backup: ProfileBackup) {
+        if (this.state.backupBusy) return;
         const ok = await confirmDelete({
             title: t("profile.backupDeleteTitle"),
             content: t("profile.backupDeleteAsk", {name: backup.name}),
         });
         if (!ok) return;
-        await ProfileBackups.remove(backup.id);
-        await this.fetchData();
+        this.setState({backupBusy: backup.id});
+        try {
+            await ProfileBackups.remove(backup.id);
+        } finally {
+            this.setState({backupBusy: undefined});
+            await this.fetchData();
+        }
     }
 
     private async handleRename(key: string, newName: string) {
@@ -166,7 +183,7 @@ class ProfileEditDialog extends React.Component<any, ProfileEditDialogStates> {
     private async fetchData() {
         const vm = await IoC.get(ProfileViewModel);
         const profileList = await vm.getProfileList();
-        const backups = await ProfileBackups.list();
+        const backups = await ProfileBackups.listForActiveGame();
         this.setState({
             profileList: profileList,
             backups,
@@ -272,10 +289,13 @@ class ProfileEditDialog extends React.Component<any, ProfileEditDialogStates> {
                                   <List.Item actions={[
                                       <Tooltip key="restore" title={t("profile.restoreBackup")}>
                                           <Button type="text" size="small" icon={<RollbackOutlined/>}
+                                                  disabled={!!this.state.backupBusy}
+                                                  loading={this.state.backupBusy === backup.id}
                                                   onClick={() => void this.handleRestoreBackup(backup)}/>
                                       </Tooltip>,
                                       <Tooltip key="delete" title={t("Delete")}>
                                           <Button type="text" size="small" danger icon={<DeleteOutlined/>}
+                                                  disabled={!!this.state.backupBusy}
                                                   onClick={() => void this.handleDeleteBackup(backup)}/>
                                       </Tooltip>,
                                   ]}>

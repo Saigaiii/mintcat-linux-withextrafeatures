@@ -84,6 +84,8 @@ export interface ConflictDiffContext {
 
 // Module-level state storage for conflict information
 const conflictMap = new Map<number, ConflictInfo>();
+/** Shared file → mods having it, built once per change of the results (every row asks for it) */
+let fileIndexCache: Map<string, number[]> | null = null;
 // Bumped on every change so components can depend on it (see useConflictVersion)
 let conflictVersion = 0;
 const conflictListeners = new Set<() => void>();
@@ -302,7 +304,8 @@ export class ConflictService {
             };
             conflictMap.set(info.modId, info);
         }
-        
+        fileIndexCache = null;
+
         bumpConflictVersion();
         // Emit event to notify UI components about conflict updates
         // Emit for all mods that might need to update their display
@@ -371,6 +374,7 @@ export class ConflictService {
      * Rebuilt from the per-mod results, which list every shared file of that mod.
      */
     private static buildFileIndex(): Map<string, number[]> {
+        if (fileIndexCache) return fileIndexCache;
         const index = new Map<string, number[]>();
         for (const info of conflictMap.values()) {
             for (const file of info.conflictingFiles) {
@@ -379,6 +383,7 @@ export class ConflictService {
                 index.set(file, list);
             }
         }
+        fileIndexCache = index;
         return index;
     }
 
@@ -509,6 +514,7 @@ export class ConflictService {
     static forgetMod(modId: number): void {
         if (!conflictMap.has(modId)) return;
         conflictMap.delete(modId);
+        fileIndexCache = null;
         const index = this.buildFileIndex();
         for (const info of conflictMap.values()) {
             info.conflictingMods = info.conflictingMods.filter(id => id !== modId);
@@ -521,6 +527,7 @@ export class ConflictService {
                 gone.push(id);
             }
         }
+        fileIndexCache = null;
         bumpConflictVersion();
         this.emitUpdateEvents();
         for (const id of gone) emitEvent('mod-conflict-update', {modId: id, hasConflict: false});
@@ -532,6 +539,7 @@ export class ConflictService {
     static clearAll(): void {
         const previousModIds = Array.from(conflictMap.keys());
         conflictMap.clear();
+        fileIndexCache = null;
         assetSummaries.clear();
         bumpConflictVersion();
         

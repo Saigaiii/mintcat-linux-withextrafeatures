@@ -15,7 +15,7 @@ import {
 } from "@/services/HomeService.ts";
 import type {ModInfo} from "@/apis/modio/ModInfo.ts";
 import {NexusModsApi, showNexusModsApiKeyRequiredMessage} from "@/apis/nexusmods";
-import {cleanupRemovedRepositoryMod} from "@/services/RepositoryModCleanup";
+import {cleanupRemovedRepositoryMod, cleanupRemovedRepositoryMods} from "@/services/RepositoryModCleanup";
 import {logActivity, nameList} from "@/services/ActivityLog";
 import {StorageAPI} from "@/storage";
 
@@ -72,10 +72,11 @@ export class HomeViewModel extends BaseViewModel {
         }
     }
 
-    public async addModsFromSubscribed(modInfos: ModInfo[], groupId: number): Promise<BatchAddModResult> {
+    public async addModsFromSubscribed(modInfos: ModInfo[], groupId: number,
+                                       folderOf?: (modInfo: ModInfo) => number): Promise<BatchAddModResult> {
         await StatusBar.log(t("Fetch Mod Info"), 'info');
         try {
-            return await this.homeService.addModsFromSubscribed(modInfos, groupId);
+            return await this.homeService.addModsFromSubscribed(modInfos, groupId, folderOf);
         } catch (error) {
             console.error('Failed to batch add subscribed mods:', error);
             message.error(t("error.addModToDatabase"));
@@ -96,10 +97,9 @@ export class HomeViewModel extends BaseViewModel {
         if (ids.length === 0) return;
         if (ids.length === 1) return this.removeMod(ids[0]);
         const names = await this.modNames(ids);
-        for (const id of ids) {
-            await this.homeService.removeModFromActiveProfile(id);
-            await cleanupRemovedRepositoryMod(id);
-        }
+        await this.homeService.removeModsFromActiveProfile(ids);
+        // Mods downloaded from a repository (Pak Hub): their downloaded files go too
+        await cleanupRemovedRepositoryMods(ids);
         await logActivity('info', t("log.list.removedMany", {count: ids.length}), nameList(names), 'list');
     }
 
