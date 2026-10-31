@@ -60,6 +60,7 @@ import {
 import { computeInstallManifestHash } from "@/tasks/InstallManifestHash";
 import { flattenTreeModIds, sortByDisplayOrder } from "@/utils/ModDisplayOrder";
 import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
+import { rememberOpen, restoreOpen } from "./FolderOpenState";
 import { RepositoryUpdates } from "@/services/RepositoryUpdates";
 import { logActivity } from "@/services/ActivityLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
@@ -231,64 +232,16 @@ export class HomePage extends BasePage<any, ModListPageState> {
     }
 
     /**
-     * Helper method to get expanded folder names from current expandedKeys
-     * This is used to preserve expanded state across tree reloads when folder IDs change
+     * Open folders by their path of names ("Parent/Child"): saving the list gives folders new ids.
+     * A folder being renamed counts under its new name.
      */
     private getExpandedFolderNames(): string[] {
-        const { expandedKeys, treeData } = this.state;
-        if (!expandedKeys || !treeData) return [];
-
-        const names: string[] = [];
-
-        const findFolderName = (nodes: DataNode[], key: string): string | null => {
-            for (const node of nodes) {
-                if (node.key === key && key.toString().startsWith('folder-')) {
-                    // a folder being renamed keeps its open state under its new name
-                    return this.pendingFolderRename?.key === key ? this.pendingFolderRename.name : node.title as string;
-                }
-                if (node.children) {
-                    const found = findFolderName(node.children as DataNode[], key);
-                    if (found) return found;
-                }
-            }
-            return null;
-        };
-
-        for (const key of expandedKeys) {
-            const name = findFolderName(treeData as DataNode[], key.toString());
-            if (name) names.push(name);
-        }
-
-        return names;
+        return rememberOpen(this.state.treeData as DataNode[] | undefined, this.state.expandedKeys ?? [], this.pendingFolderRename);
     }
 
-    /**
-     * Helper method to reconstruct expandedKeys from folder names after tree reload
-     * Maps folder names back to their new IDs
-     */
-    private reconstructExpandedKeys(folderNames: string[], treeData: DataNode[]): string[] {
-        const newKeys: string[] = [];
-
-        const findKeyByName = (nodes: DataNode[], name: string): string | null => {
-            for (const node of nodes) {
-                const key = node.key.toString();
-                if (key.startsWith('folder-') && node.title === name) {
-                    return key;
-                }
-                if (node.children) {
-                    const found = findKeyByName(node.children as DataNode[], name);
-                    if (found) return found;
-                }
-            }
-            return null;
-        };
-
-        for (const name of folderNames) {
-            const key = findKeyByName(treeData, name);
-            if (key) newKeys.push(key);
-        }
-
-        return newKeys;
+    /** Keys of the remembered open folders in a rebuilt list */
+    private reconstructExpandedKeys(folderPaths: string[], treeData: DataNode[]): string[] {
+        return restoreOpen(treeData, folderPaths);
     }
 
     private async handleExportMod(id: number): Promise<void> {

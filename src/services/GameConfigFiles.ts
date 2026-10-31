@@ -204,6 +204,16 @@ export const GameConfigFiles = {
         return out.sort((a, b) => rank(a.name) - rank(b.name) || a.name.localeCompare(b.name));
     },
 
+    /** Size and time of a file as it is now (null: not there), to see whether something else changed it */
+    async version(path: string): Promise<{ size: number; mtime: number } | null> {
+        try {
+            const info = await stat(path);
+            return {size: info.size, mtime: info.mtime?.getTime() ?? 0};
+        } catch {
+            return null;
+        }
+    },
+
     async read(path: string): Promise<DecodedText> {
         if (!(await exists(path))) return {text: "", encoding: "utf8", eol: "\r\n"};
         return decodeConfig(await readFile(path));

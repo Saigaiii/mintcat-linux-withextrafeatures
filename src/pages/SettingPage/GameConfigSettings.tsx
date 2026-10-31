@@ -41,14 +41,18 @@ function ConfigEditor({folder, file, onClose}: {
     const [error, setError] = React.useState<string>();
     const [saving, setSaving] = React.useState(false);
     const [backups, setBackups] = React.useState<ConfigBackup[]>([]);
+    /** The file as it was when opened, to notice when the game (or anything else) changed it since */
+    const openedAs = React.useRef<{ size: number; mtime: number } | null>(null);
     const dirty = loaded !== undefined && text !== loaded.text;
 
     React.useEffect(() => {
         let gone = false;
         (async () => {
             try {
+                const before = await GameConfigFiles.version(file.path);
                 const read = await GameConfigFiles.read(file.path);
                 if (gone) return;
+                openedAs.current = before;
                 setLoaded(read);
                 setText(read.text);
                 setBackups(await GameConfigFiles.backups(folder.kind, file.name));
@@ -65,6 +69,17 @@ function ConfigEditor({folder, file, onClose}: {
         if (!loaded || saving) return;
         setSaving(true);
         try {
+            const now = await GameConfigFiles.version(file.path);
+            const was = openedAs.current;
+            const changed = was === null ? now !== null : now === null || now.mtime !== was.mtime || now.size !== was.size;
+            if (changed) {
+                const ok = await MessageBox.confirm({
+                    title: t("gameConfig.changedTitle"),
+                    content: t("gameConfig.changedSinceOpened", {name: file.name}),
+                    okText: t("gameConfig.overwrite"),
+                });
+                if (!ok) return;
+            }
             await GameConfigFiles.save(folder.kind, file, text, loaded);
             message.success(t("gameConfig.saved", {name: file.name}));
             onClose(true);
