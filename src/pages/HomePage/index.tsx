@@ -60,7 +60,7 @@ import {
 import { computeInstallManifestHash } from "@/tasks/InstallManifestHash";
 import { flattenTreeModIds, sortByDisplayOrder } from "@/utils/ModDisplayOrder";
 import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
-import { rememberOpen, restoreOpen } from "./FolderOpenState";
+import { folderPaths, rememberOpen, restoreOpen } from "./FolderOpenState";
 import { RepositoryUpdates } from "@/services/RepositoryUpdates";
 import { logActivity } from "@/services/ActivityLog";
 import { RepositoryLinkDialog } from "@/dialogs/RepositoryLinkDialog";
@@ -232,8 +232,8 @@ export class HomePage extends BasePage<any, ModListPageState> {
     }
 
     /**
-     * Open folders by their path of names ("Parent/Child"): saving the list gives folders new ids.
-     * A folder being renamed counts under its new name.
+     * Open folders by their path of names (see FolderOpenState): saving the list gives folders
+     * new ids. A folder being renamed counts under its new name.
      */
     private getExpandedFolderNames(): string[] {
         return rememberOpen(this.state.treeData as DataNode[] | undefined, this.state.expandedKeys ?? [], this.pendingFolderRename);
@@ -973,56 +973,79 @@ export class HomePage extends BasePage<any, ModListPageState> {
         this.setState({ checkedKeys: keys });
     }
 
-    /** Names of the folders that were open before a search opened the ones with matches */
+    /** Paths of the folders that were open before a search opened the ones with matches */
     private expandedBeforeSearch: string[] | null = null;
+    /** The search whose matching folders were opened last (a rebuild for the same one keeps what was closed since) */
+    private openedForSearch: string | null = null;
 
     /**
-     * Which folders are open after the list is rebuilt. Folders are matched by name, as saving
-     * the list gives them new ids. A search opens every folder with a matching mod (else the
-     * matches could be hidden in closed folders) and clearing it puts the earlier ones back.
+     * Which folders are open after the list is rebuilt. Folders are matched by their path of
+     * names, as saving the list gives them new ids. A search opens every folder with a matching
+     * mod (else the matches could be hidden in closed folders) and clearing it puts the earlier
+     * ones back, with the folders opened or closed by hand during the search as they were left.
      */
     private nextExpandedKeys(treeData: DataNode[], defaults: any[], reset: boolean): any[] {
         if (reset) {
             // another profile or game: all open
             this.expandedBeforeSearch = null;
+            this.openedForSearch = null;
             return defaults;
         }
-        const searching = (TreeViewConverter.filterList ?? []).some(f => f && f !== "All");
-        if (searching) {
+        const filters = (TreeViewConverter.filterList ?? []).filter(f => f && f !== "All");
+        if (filters.length > 0) {
             if (this.expandedBeforeSearch === null) this.expandedBeforeSearch = this.getExpandedFolderNames();
             const keys = new Set(this.reconstructExpandedKeys(this.getExpandedFolderNames(), treeData));
-            const withMods = (nodes: DataNode[] | undefined): boolean => {
-                let any = false;
-                for (const node of nodes ?? []) {
-                    if (node.isLeaf) {
-                        any = true;
-                    } else if (withMods(node.children as DataNode[] | undefined)) {
-                        keys.add(String(node.key));
-                        any = true;
+            const search = JSON.stringify(filters);
+            if (search !== this.openedForSearch) {
+                this.openedForSearch = search;
+                const withMods = (nodes: DataNode[] | undefined): boolean => {
+                    let any = false;
+                    for (const node of nodes ?? []) {
+                        if (node.isLeaf) {
+                            any = true;
+                        } else if (withMods(node.children as DataNode[] | undefined)) {
+                            keys.add(String(node.key));
+                            any = true;
+                        }
                     }
-                }
-                return any;
-            };
-            withMods(treeData);
+                    return any;
+                };
+                withMods(treeData);
+            }
             return [...keys];
         }
+        this.openedForSearch = null;
         if (this.expandedBeforeSearch !== null) {
             const names = this.expandedBeforeSearch;
             this.expandedBeforeSearch = null;
             return this.reconstructExpandedKeys(names, treeData);
         }
-        const expandedFolderNames = this.getExpandedFolderNames();
-        if (expandedFolderNames.length > 0) {
-            const reconstructedKeys = this.reconstructExpandedKeys(expandedFolderNames, treeData);
-            // none of them is left (deleted or renamed elsewhere): all open
-            return reconstructedKeys.length > 0 ? reconstructedKeys : defaults;
-        }
         if (!this.state.treeData?.length) {
             // first load: all open
             return defaults;
         }
-        // every folder was closed (e.g. "Collapse all folders"): keep them closed
-        return [];
+        // the same folders as before; none when they were all closed (e.g. "Collapse all
+        // folders") or the open ones were deleted
+        return this.reconstructExpandedKeys(this.getExpandedFolderNames(), treeData);
+    }
+
+    /**
+     * A folder opened or closed by hand during a search stays that way when the search is
+     * cleared (the others go back to how they were before it)
+     */
+    private rememberDuringSearch(open: string[], closed: string[]) {
+        if (this.expandedBeforeSearch === null) return;
+        const paths = folderPaths(this.state.treeData as DataNode[] | undefined);
+        const before = new Set(this.expandedBeforeSearch);
+        for (const key of open) {
+            const path = paths.get(String(key));
+            if (path !== undefined) before.add(path);
+        }
+        for (const key of closed) {
+            const path = paths.get(String(key));
+            if (path !== undefined) before.delete(path);
+        }
+        this.expandedBeforeSearch = [...before];
     }
 
     /** Keys of every folder in the list, subfolders included */
@@ -1049,11 +1072,16 @@ export class HomePage extends BasePage<any, ModListPageState> {
 
     @autoBind
     private setAllFoldersExpanded(expand: boolean) {
-        this.setState({expandedKeys: expand ? this.getAllFolderKeys() : []});
+        const all = this.getAllFolderKeys();
+        this.rememberDuringSearch(expand ? all : [], expand ? [] : all);
+        this.setState({expandedKeys: expand ? all : []});
     }
 
     @autoBind
-    private onTreeNodeExpand(keys) {
+    private onTreeNodeExpand(keys: any[]) {
+        const before = new Set((this.state.expandedKeys ?? []).map(String));
+        const after = new Set<string>((keys ?? []).map(String));
+        this.rememberDuringSearch([...after].filter(k => !before.has(k)), [...before].filter(k => !after.has(k)));
         this.setState({
             expandedKeys: keys,
         })

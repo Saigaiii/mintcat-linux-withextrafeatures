@@ -4,7 +4,8 @@
  * version kept, and mark them read-only so the game doesn't write over hand-made changes.
  *
  * Only *.ini files in those folders are written, and only when the user saves one. Copies go to
- * <app data>/config-backups/<where>/<date>/<file>; only that folder is ever pruned or deleted.
+ * <app data>/config-backups/<store>/<date>/<file> (store: "prefix"/"game" for Deep Rock
+ * Galactic, "<game>-prefix"/"<game>-game" for others); only that folder is ever pruned or deleted.
  */
 import {invoke} from "@tauri-apps/api/core";
 import {appDataDir, join} from "@tauri-apps/api/path";
@@ -16,6 +17,8 @@ export type ConfigFolderKind = "prefix" | "game";
 export interface ConfigFolder {
     kind: ConfigFolderKind;
     path: string;
+    /** Where its earlier versions are kept, below config-backups */
+    store: string;
     exists: boolean;
     /** Newest change of an .ini file in it, ms since 1970 (0: none) */
     newest: number;
@@ -48,7 +51,8 @@ export interface DecodedText {
 
 /** The files the game keeps, shown even before they exist (so they can be created) */
 export const STANDARD_FILES = ["Engine.ini", "Game.ini", "GameUserSettings.ini", "Input.ini", "Scalability.ini"];
-const DRG_APP_ID = 548430;
+/** Steam app ids, for the Proton prefix (compatdata/<id>) */
+const STEAM_APP_IDS: Record<string, number> = {drg: 548430, rc: 2605790};
 const KEEP_PER_FILE = 20;
 
 // ---------------------------------------------------------------------------------------------
@@ -56,8 +60,10 @@ const KEEP_PER_FILE = 20;
 
 /**
  * Where the config folder can be, from the game's main pak (…/<Project>/Content/Paks/x.pak):
- * the game folder's <Project>/Saved/Config/WindowsNoEditor, and for a Steam game run with Proton
- * the same path below AppData/Local in its prefix (steamapps/compatdata/<app id>/pfx).
+ * the game folder's <Project>/Saved/Config/<platform>, and for a Steam game run with Proton
+ * the same path below AppData/Local in its prefix (steamapps/compatdata/<app id>/pfx). The
+ * platform folder is WindowsNoEditor for Unreal Engine 4 games (FSD-WindowsNoEditor.pak) and
+ * Windows for Unreal Engine 5 ones (RogueCore-Windows.pak).
  */
 export function configFolderCandidates(pakPath: string, steamAppId?: number): { kind: ConfigFolderKind; path: string }[] {
     const trimmed = pakPath.trim();
@@ -68,7 +74,9 @@ export function configFolderCandidates(pakPath: string, steamAppId?: number): { 
     if (parts.length < 5) return [];
     const project = parts.slice(0, -3); // drop Content/Paks/<file>
     const projectName = project[project.length - 1];
-    const tail = ["Saved", "Config", "WindowsNoEditor"];
+    const pakName = parts[parts.length - 1];
+    const platform = !/WindowsNoEditor/i.test(pakName) && /Windows/i.test(pakName) ? "Windows" : "WindowsNoEditor";
+    const tail = ["Saved", "Config", platform];
     const out: { kind: ConfigFolderKind; path: string }[] = [
         {kind: "game", path: [...project, ...tail].join(sep)},
     ];
@@ -147,6 +155,12 @@ export function parseBackupStamp(name: string): number {
     return new Date(y, mo - 1, d, h, mi, s, ms).getTime();
 }
 
+/** The backup folder for a game's config folder (Deep Rock Galactic keeps the plain names it had first) */
+export function configStore(game: string, kind: ConfigFolderKind): string {
+    const id = game.toLowerCase().replace(/[^a-z0-9]+/g, "") || "drg";
+    return id === "drg" ? kind : `${id}-${kind}`;
+}
+
 /** Only plain .ini file names (no folders, no path tricks) are read or written */
 export function isConfigFileName(name: string): boolean {
     return /^[^\\/]+\.ini$/i.test(name) && name !== "." && name !== "..";
@@ -165,15 +179,15 @@ export const GameConfigFiles = {
         const game = await (await StorageAPI.getGames()).getActiveGame();
         const pak = game?.installPath?.trim();
         if (!pak) return [];
-        const appId = (game?.name ?? "drg").toLowerCase() === "drg" ? DRG_APP_ID : undefined;
+        const name = (game?.name ?? "drg").toLowerCase();
         const out: ConfigFolder[] = [];
-        for (const c of configFolderCandidates(pak, appId)) {
+        for (const c of configFolderCandidates(pak, STEAM_APP_IDS[name])) {
             const there = await exists(c.path).catch(() => false);
             let newest = 0;
             if (there) {
                 for (const f of await GameConfigFiles.files(c.path)) newest = Math.max(newest, f.exists ? f.mtime : 0);
             }
-            out.push({...c, exists: there, newest});
+            out.push({...c, store: configStore(name, c.kind), exists: there, newest});
         }
         // the folder the game wrote to last is the one it uses
         return out.sort((a, b) => Number(b.exists) - Number(a.exists) || b.newest - a.newest);
@@ -223,13 +237,13 @@ export const GameConfigFiles = {
      * Save `text` to `file`, stored like `like` (the version that was opened). The file as it
      * was is copied aside first. A read-only file stays read-only (that is for the game).
      */
-    async save(kind: ConfigFolderKind, file: ConfigFile, text: string, like: { encoding: TextEncoding; eol: "\r\n" | "\n" }): Promise<void> {
+    async save(store: string, file: ConfigFile, text: string, like: { encoding: TextEncoding; eol: "\r\n" | "\n" }): Promise<void> {
         if (!isConfigFileName(file.name)) throw new Error(`not a config file: ${file.name}`);
         const there = await exists(file.path);
         let readonly = false;
         if (there) {
             readonly = !!(await stat(file.path)).readonly;
-            const dir = await join(await backupsRoot(), kind, backupStamp());
+            const dir = await join(await backupsRoot(), store, backupStamp());
             await mkdir(dir, {recursive: true});
             await copyFile(file.path, await join(dir, file.name));
         } else {
@@ -242,7 +256,7 @@ export const GameConfigFiles = {
         } finally {
             if (readonly) await GameConfigFiles.setReadOnly(file.path, true);
         }
-        await GameConfigFiles.prune(kind, file.name).catch(e => console.warn("[GameConfig] prune failed", e));
+        await GameConfigFiles.prune(store, file.name).catch(e => console.warn("[GameConfig] prune failed", e));
     },
 
     async setReadOnly(path: string, readonly: boolean): Promise<void> {
@@ -250,8 +264,8 @@ export const GameConfigFiles = {
     },
 
     /** Earlier versions of a file, newest first */
-    async backups(kind: ConfigFolderKind, name: string): Promise<ConfigBackup[]> {
-        const root = await join(await backupsRoot(), kind);
+    async backups(store: string, name: string): Promise<ConfigBackup[]> {
+        const root = await join(await backupsRoot(), store);
         if (!(await exists(root))) return [];
         const out: ConfigBackup[] = [];
         for (const e of await readDir(root)) {
@@ -268,9 +282,9 @@ export const GameConfigFiles = {
     },
 
     /** Keep the newest copies of a file; empty backup folders go too */
-    async prune(kind: ConfigFolderKind, name: string): Promise<void> {
-        const root = await join(await backupsRoot(), kind);
-        for (const old of (await GameConfigFiles.backups(kind, name)).slice(KEEP_PER_FILE)) {
+    async prune(store: string, name: string): Promise<void> {
+        const root = await join(await backupsRoot(), store);
+        for (const old of (await GameConfigFiles.backups(store, name)).slice(KEEP_PER_FILE)) {
             await remove(old.path);
             const dir = old.path.slice(0, old.path.length - name.length).replace(/[\\/]+$/, "");
             if (dir.startsWith(root) && dir !== root && (await readDir(dir)).length === 0) await remove(dir, {recursive: true});

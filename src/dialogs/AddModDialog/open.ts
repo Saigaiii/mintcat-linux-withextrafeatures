@@ -319,7 +319,39 @@ async function isUnpackedModDir(dirPath: string): Promise<boolean> {
     }
 }
 
-async function onClipboardChange(text: string) {
+/**
+ * Whether every copied link and file is already in the active profile's list. A link or file
+ * MINTCAT doesn't know counts as not in it.
+ */
+async function allInList(links: string[], paths: string[]): Promise<boolean> {
+    try {
+        const profile = await (await StorageAPI.getProfiles()).getActiveProfile();
+        if (!profile?.id) return false;
+        const modsApi = await StorageAPI.getMods();
+        const profiles = await StorageAPI.getProfiles();
+        const inList = async (mod: { modId?: number } | null) =>
+            !!mod?.modId && !!(await profiles.getProfileMod(profile.id!, mod.modId));
+        for (const link of links) {
+            const nameId = ModioApi.parseModLinks(link);
+            const mod = (nameId ? await modsApi.getModByNameId(nameId, "Modio") : null)
+                ?? await modsApi.getModByUrl(link);
+            if (!(await inList(mod))) return false;
+        }
+        for (const p of paths) {
+            if (!(await inList(await modsApi.getModByUrl(p)))) return false;
+        }
+        return true;
+    } catch (error) {
+        console.warn("[Clipboard] could not check the list", error);
+        return false;
+    }
+}
+
+/**
+ * @param again the same text was copied again: only worth showing when something in it isn't
+ *   in the list (e.g. the mod was removed since), not when a clipboard manager put it back
+ */
+async function onClipboardChange(text: string, again: boolean = false) {
     if (!text) {
         return;
     }
@@ -370,6 +402,9 @@ async function onClipboardChange(text: string) {
     }
 
     if (links.length === 0 && paths.length === 0) {
+        return;
+    }
+    if (again && await allInList(links, paths)) {
         return;
     }
 

@@ -1,5 +1,6 @@
 pub mod app;
 pub mod backup;
+pub mod clipboard_watch;
 pub mod control_plane;
 pub mod download;
 pub mod frontend;

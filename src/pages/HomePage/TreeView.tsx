@@ -12,7 +12,8 @@ import {ProfileViewModel} from "@/dialogs/ProfileEditDialog/ProfileViewModel.ts"
 import {TreeViewItem} from "./TreeViewItem";
 import {dragAndDrop} from "./DragAndDropTree";
 import {DragAutoScroll} from "./DragAutoScroll";
-import {gatherAround, leavesInOrder, moveGroupToPosition, moveToPosition} from "./TreeMoves";
+import {gatherAround, groupSpread, leavesInOrder, moveGroupToPosition, moveToPosition} from "./TreeMoves";
+import {MessageBox} from "@/components/MessageBox";
 import {t} from "i18next";
 import { IoC } from "@/core/IoC";
 
@@ -108,6 +109,22 @@ export class TreeView extends React.Component<TreeViewProps> {
     private groupOf(key: string): string[] | null {
         const {keys} = this.pickedMods();
         return keys.length > 1 && keys.includes(key) ? keys : null;
+    }
+
+    /**
+     * Before moving picked mods from several folders together: ask when it's many of them or some
+     * can't be seen (e.g. after Ctrl+A), as they all end up in one place and there is no undo
+     */
+    private async confirmGroupMove(group: string[]): Promise<boolean> {
+        const {folders, hidden} = groupSpread(this.props.treeData as any[], group, this.props.expandedKeys ?? []);
+        if (folders < 2 || (group.length <= 20 && hidden === 0)) return true;
+        return await MessageBox.confirm({
+            title: t("list.moveGroupConfirmTitle", {count: group.length}),
+            content: hidden > 0
+                ? t("list.moveGroupConfirmHidden", {count: group.length, folders, hidden})
+                : t("list.moveGroupConfirm", {count: group.length, folders}),
+            okText: t("list.moveGroupConfirmOk"),
+        });
     }
 
     /** Dragging one of several picked mods: show how many go along */
@@ -314,6 +331,7 @@ export class TreeView extends React.Component<TreeViewProps> {
 
         // one of several picked mods: they all go, in their order
         const group = this.groupOf(sourceKey);
+        if (group && !(await this.confirmGroupMove(group))) return;
         const folders = group
             ? moveGroupToPosition(treeData, order, group, position)
             : moveToPosition(treeData, order, sourceKey, position);
@@ -343,6 +361,8 @@ export class TreeView extends React.Component<TreeViewProps> {
     @autoBind
     private async onDrop(info: any) {
         this.autoScroll.stop();
+        const dropGroup = info.dragNode?.isLeaf ? this.groupOf(String(info.dragNode.key)) : null;
+        if (dropGroup && !(await this.confirmGroupMove(dropGroup))) return;
         await IoC.get(TreeViewModel);
         const profileVM = await IoC.get(ProfileViewModel);
         const activeRoot = await profileVM.getActiveProfileTreeRoot();

@@ -147,3 +147,20 @@ export function gatherAround(treeData: any[], keysInOrder: string[], centerKey: 
     }
     return true;
 }
+
+/**
+ * How spread out picked mods are: how many folders they are in (the top level counts as one)
+ * and how many are inside a closed folder, where they can't be seen
+ */
+export function groupSpread(treeData: any[] | undefined, keys: string[], openKeys: unknown[]): { folders: number; hidden: number } {
+    const picked = new Set(keys);
+    const open = new Set(openKeys.map(String));
+    const folders = new Set<string>();
+    let hidden = 0;
+    for (const leaf of leavesInOrder(treeData)) {
+        if (!picked.has(String(leaf.node.key))) continue;
+        folders.add(leaf.folders.join("/"));
+        if (leaf.folders.some(f => !open.has(f))) hidden++;
+    }
+    return {folders: folders.size, hidden};
+}

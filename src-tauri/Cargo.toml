@@ -66,6 +66,12 @@ libloading = "0.8"
 # integrate
 zip = { version = "2.2.0", default-features = false, features = ["aes-crypto", "deflate", "time"] }
 
+# Clipboard change notifications (copying the same link again opens Add Mod again);
+# the same versions the clipboard plugin already uses
+[target.'cfg(target_os = "linux")'.dependencies]
+wl-clipboard-rs = "0.9.5"
+x11rb = { version = "0.13.2", features = ["xfixes"] }
+
 # 系统代理检测（未手动设置代理时使用），通过注册表读取兼容所有 Win10 版本
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"

@@ -50,6 +50,7 @@ pub fn run() {
             }
         }))
         .setup(|app| {
+            crate::clipboard_watch::start();
             if let Err(error) = frontend::rollback_unconfirmed_pending(app.handle()) {
                 log::warn!("[FrontendUpdate] rollback check failed: {}", error);
             }
@@ -142,6 +143,7 @@ pub fn run() {
             backup::rclone_cancel,
             backup::file_set_mtime,
             backup::file_set_readonly,
+            crate::clipboard_watch::clipboard_change_count,
             system_icon::system_icon_status,
             system_icon::system_icon_apply,
             system_icon::system_icon_restore,

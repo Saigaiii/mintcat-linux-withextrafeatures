@@ -47,7 +47,8 @@ export class DragAutoScroll {
 
     /** @param source the element being dragged */
     start(source?: EventTarget | null) {
-        if (this.active) return;
+        // still running: the end of the last drag was missed, so start over for this one
+        if (this.active) this.stop();
         this.active = true;
         this.heldSince = 0;
         // Once the dragged row has scrolled out of the list it is removed from the page, and its

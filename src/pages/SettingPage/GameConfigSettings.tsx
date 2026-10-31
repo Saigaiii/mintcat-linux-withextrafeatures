@@ -55,7 +55,7 @@ function ConfigEditor({folder, file, onClose}: {
                 openedAs.current = before;
                 setLoaded(read);
                 setText(read.text);
-                setBackups(await GameConfigFiles.backups(folder.kind, file.name));
+                setBackups(await GameConfigFiles.backups(folder.store, file.name));
             } catch (e) {
                 if (!gone) setError(errorText(e));
             }
@@ -63,7 +63,7 @@ function ConfigEditor({folder, file, onClose}: {
         return () => {
             gone = true;
         };
-    }, [file.path, file.name, folder.kind]);
+    }, [file.path, file.name, folder.store]);
 
     const save = async () => {
         if (!loaded || saving) return;
@@ -80,7 +80,7 @@ function ConfigEditor({folder, file, onClose}: {
                 });
                 if (!ok) return;
             }
-            await GameConfigFiles.save(folder.kind, file, text, loaded);
+            await GameConfigFiles.save(folder.store, file, text, loaded);
             message.success(t("gameConfig.saved", {name: file.name}));
             onClose(true);
         } catch (e) {
