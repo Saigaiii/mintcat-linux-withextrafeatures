@@ -1388,12 +1388,13 @@ export class HomePage extends BasePage<any, ModListPageState> {
         const id = extractId(nodeKey);
 
         switch (key) {
-            case "expand_all_folders":
-                this.setAllFoldersExpanded(true);
+            case "expand_folder":
+            case "collapse_folder": {
+                // just this folder (the toolbar button does all of them)
+                const open = (this.state.expandedKeys ?? []).map(String).filter(k => k !== String(nodeKey));
+                this.onTreeNodeExpand(key === "expand_folder" ? [...open, String(nodeKey)] : open);
                 break;
-            case "collapse_all_folders":
-                this.setAllFoldersExpanded(false);
-                break;
+            }
             case "add_new_group": {
                 this.inputDialogRef.current?.setCallback(
                     t("Add New Group"),

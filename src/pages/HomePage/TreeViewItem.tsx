@@ -189,11 +189,13 @@ async function getModById(modId: number): Promise<CompleteModData | null> {
 }
 
 
-function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
+function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder, expanded}: {
     nodeData: any;
     onMenuClick: any;
     folders?: FolderInfo[];
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
+    /** Whether this folder is open (the menu offers the opposite) */
+    expanded?: boolean;
 }) {
     const lookVersion = useSyncExternalStore(ModListAppearance.subscribe, ModListAppearance.version);
     const colorKey: string = nodeData.colorKey ?? nodeData.key;
@@ -236,8 +238,10 @@ function ModTreeViewFolder({nodeData, onMenuClick, folders, onMoveToFolder}: {
             children: moveToChildren,
         }] : []),
         {type: 'divider'},
-        {label: t('folders.expandAll'), key: 'expand_all_folders', icon: <ColumnHeightOutlined />},
-        {label: t('folders.collapseAll'), key: 'collapse_all_folders', icon: <VerticalAlignMiddleOutlined />},
+        // this folder only (the toolbar button opens or closes all of them)
+        expanded
+            ? {label: t('folders.collapseOne'), key: 'collapse_folder', icon: <VerticalAlignMiddleOutlined />}
+            : {label: t('folders.expandOne'), key: 'expand_folder', icon: <ColumnHeightOutlined />},
         {type: 'divider'},
         {label: t('Delete Group'), key: 'delete_group', icon: <DeleteOutlined />}
     ];
@@ -1321,6 +1325,8 @@ export interface TreeViewItemProps {
     groupFirst?: number;
     /** Click on a mod row (Ctrl/Shift-clicks select mods) */
     onRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
+    /** A folder: whether it is open */
+    expanded?: boolean;
 }
 
 /**
@@ -1342,6 +1348,7 @@ function TreeViewItemInner({
     groupSize,
     groupFirst,
     onRowClick,
+    expanded,
 }: TreeViewItemProps) {
     const {token} = useToken();
     const describedMod = React.useMemo(() => ({
@@ -1500,6 +1507,7 @@ function TreeViewItemInner({
                 onMenuClick={onMenuClick}
                 folders={folders}
                 onMoveToFolder={onMoveToFolder}
+                expanded={expanded}
             />
         );
     }

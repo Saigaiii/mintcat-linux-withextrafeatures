@@ -40,6 +40,8 @@
     "group.deleteOk": "Delete folder",
     "folders.expandAll": "Expand all folders",
     "folders.collapseAll": "Collapse all folders",
+    "folders.expandOne": "Expand folder",
+    "folders.collapseOne": "Collapse folder",
     "Batch Download": "Batch Download",
     "Batch Download Failed Summary": "Batch Download {{success}}/{{total}} ({{failed}} failed)",
     "Batch Download Friendly": "Batch download started: {{count}} mods, {{concurrency}} at a time",

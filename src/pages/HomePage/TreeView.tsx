@@ -524,6 +524,7 @@ export class TreeView extends React.Component<TreeViewProps> {
                 groupSize={group?.length ?? 0}
                 groupFirst={groupFirst}
                 onRowClick={this.props.onTreeRowClick}
+                expanded={nodeData.isLeaf ? undefined : (this.props.expandedKeys ?? []).map(String).includes(String(nodeData.key))}
             />
         );
     }

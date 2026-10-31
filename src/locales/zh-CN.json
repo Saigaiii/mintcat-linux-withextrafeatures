@@ -40,6 +40,8 @@
 	"group.deleteOk": "删除文件夹",
 	"folders.expandAll": "展开所有文件夹",
 	"folders.collapseAll": "折叠所有文件夹",
+	"folders.expandOne": "展开文件夹",
+	"folders.collapseOne": "折叠文件夹",
 	"Batch Download": "批量下载",
 	"Batch Download Failed Summary": "批量下载 {{success}}/{{total}}（{{failed}} 个失败）",
 	"Batch Download Friendly": "批量下载中：共 {{count}} 个 Mod，同时下载 {{concurrency}} 个",
