@@ -162,6 +162,13 @@ body::before {
     margin-bottom: 10px;
 }
 
+/* Dragging a row first selected its text from the grip to where the pointer went, and the
+   highlight stayed after the drop */
+.ant-tree-content .ant-tree-treenode {
+    -webkit-user-select: none;
+    user-select: none;
+}
+
 .ant-tree-title {
     display: block !important;
     width: 100% !important;

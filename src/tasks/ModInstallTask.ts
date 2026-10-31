@@ -13,7 +13,7 @@ import { exists, stat } from '@tauri-apps/plugin-fs';
 import { ModSourceType } from '@/models/mod/types';
 import { MODCAT_PLATFORM } from '@/apis/modcat';
 import { ensureInternalAssets } from '@/services/InternalAssetService';
-import { md5 } from '@/utils/CryptApi';
+import { computeInstallManifestHash } from './InstallManifestHash';
 import { isUe4ssEnabled } from '@/utils/Ue4ssSetting';
 import { BackendRuntimeApi } from '@/apis/BackendRuntimeApi';
 import { flattenTreeModIds, sortByDisplayOrder } from '@/utils/ModDisplayOrder';
@@ -33,59 +33,7 @@ async function isValidUnpackedMod(dirPath: string): Promise<boolean> {
     }
 }
 
-/**
- * Compute a deterministic hash from the full set of install inputs.
- * Any change in the mod list, cache files, UE4SS mode, or asset zips
- * produces a different hash, automatically triggering reinstallation.
- */
-async function fileSizeAndMtime(filePath: string): Promise<{ size: number; mtime: number }> {
-    try {
-        if (filePath && await exists(filePath)) {
-            const info = await stat(filePath);
-            return {
-                size: info.size ?? 0,
-                mtime: info.mtime?.getTime() ?? 0,
-            };
-        }
-    } catch { /* file missing or inaccessible */ }
-    return { size: 0, mtime: 0 };
-}
-
-export async function computeInstallManifestHash(
-    enabledMods: CompleteModData[],
-    ue4ssEnabled: boolean,
-    compressModPak: boolean = false,
-    assetPaths?: { ue4ssZipPath?: string; drgZipPath?: string; rcZipPath?: string } | null
-): Promise<string> {
-    const modEntries = [];
-    for (const mod of enabledMods) {
-        const cachePath = mod.download?.cachePath || "";
-        const { size, mtime } = await fileSizeAndMtime(cachePath);
-        modEntries.push({
-            modId: mod.modId,
-            nameId: mod.nameId || "",
-            cachePath,
-            fileSize: size,
-            mtime,
-            isUnpacked: cachePath ? await isValidUnpackedMod(cachePath) : false,
-        });
-    }
-
-    const ue4ssZipPath = ue4ssEnabled ? assetPaths?.ue4ssZipPath || "" : "";
-    const ue4ssStat = await fileSizeAndMtime(ue4ssZipPath);
-    const drgStat   = await fileSizeAndMtime(assetPaths?.drgZipPath || "");
-    const rcStat    = await fileSizeAndMtime(assetPaths?.rcZipPath || "");
-
-    const manifest = {
-        mods: modEntries,
-        ue4ssMode: ue4ssEnabled ? "Enabled" : "Disabled",
-        ...(compressModPak ? { compressModPak } : {}),
-        ue4ssZip: { path: ue4ssZipPath, ...ue4ssStat },
-        drgZip:   { path: assetPaths?.drgZipPath || "",   ...drgStat },
-        rcZip:    { path: assetPaths?.rcZipPath || "",     ...rcStat },
-    };
-    return md5(JSON.stringify(manifest));
-}
+export { computeInstallManifestHash };
 
 /**
  * Task: Install mods to game

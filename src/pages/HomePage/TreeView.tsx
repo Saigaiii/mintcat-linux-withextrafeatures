@@ -1,5 +1,6 @@
 import {InstallOrder} from "@/services/ListDisplay";
 import React from "react";
+import {flushSync} from "react-dom";
 import {Tree, TreeProps} from 'antd';
 import type {CompleteModData} from "@/storage/dao/ModDAO";
 import {StorageAPI} from "@/storage";
@@ -10,6 +11,8 @@ import {ModListAppearance} from "@/services/ModListAppearance";
 import {ProfileViewModel} from "@/dialogs/ProfileEditDialog/ProfileViewModel.ts";
 import {TreeViewItem} from "./TreeViewItem";
 import {dragAndDrop} from "./DragAndDropTree";
+import {DragAutoScroll} from "./DragAutoScroll";
+import {moveToPosition} from "./TreeMoves";
 import { IoC } from "@/core/IoC";
 
 /** A folder's "Parent/Child" path in a tree, as folder colors are keyed (null when not a folder there) */
@@ -59,21 +62,23 @@ export interface TreeViewProps {
     onModListChange?: () => void;
 }
 
-interface TreeViewState {
-    isDragging: boolean;
-}
-
-export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
+export class TreeView extends React.Component<TreeViewProps> {
     private folderItemOrderMap = new Map<string, number>();
     /** treeData the folder list / per-folder numbers below were computed from */
     private derivedFrom: unknown = null;
     private folderListCache: FolderInfo[] = [];
 
-    state: TreeViewState = {
-        isDragging: false
-    };
+    private readonly wrapperRef = React.createRef<HTMLDivElement>();
+    private readonly treeRef = React.createRef<any>();
+    private readonly autoScroll = new DragAutoScroll(
+        () => this.wrapperRef.current?.querySelector<HTMLElement>(".ant-tree-list-holder") ?? null,
+        top => flushSync(() => this.treeRef.current?.scrollTo?.(top)));
 
-    shouldComponentUpdate(nextProps: TreeViewProps, nextState: TreeViewState) {
+    componentWillUnmount() {
+        this.autoScroll.stop();
+    }
+
+    shouldComponentUpdate(nextProps: TreeViewProps) {
         return (
             nextProps.treeData !== this.props.treeData ||
             nextProps.expandedKeys !== this.props.expandedKeys ||
@@ -81,8 +86,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
             nextProps.checkedKeys !== this.props.checkedKeys ||
             nextProps.isMultiSelect !== this.props.isMultiSelect ||
             nextProps.virtual !== this.props.virtual ||
-            nextProps.height !== this.props.height ||
-            nextState.isDragging !== this.state.isDragging
+            nextProps.height !== this.props.height
         );
     }
 
@@ -240,8 +244,50 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
         }
     }
 
+    /**
+     * Move a mod so it gets install position `position` (1 = top of the whole list): it goes right
+     * before the mod now at that position (moving up) or right after it (moving down), in that
+     * mod's folder.
+     */
+    @autoBind
+    private async onMoveToPosition(sourceKey: string, position: number) {
+        const order = InstallOrder.get();
+        await IoC.get(TreeViewModel);
+        const profileVM = await IoC.get(ProfileViewModel);
+        const activeRoot = await profileVM.getActiveProfileTreeRoot();
+        const converter = new TreeViewConverter(await this.getAllModsAsList());
+        // Work on the whole list, not only what the search shows
+        const filterList = TreeViewConverter.filterList;
+        TreeViewConverter.filterList = [];
+        const treeData = (converter.convertToFromRoot(activeRoot) ?? []) as any[];
+        TreeViewConverter.filterList = filterList;
+
+        const folders = moveToPosition(treeData, order, sourceKey, position);
+        if (!folders) return;
+
+        try {
+            const profileTreeItem = converter.convertFrom(treeData);
+            if (!profileTreeItem || profileTreeItem.children.length === 0) return;
+            // open the folders it lands in, so it stays in view
+            const expanded = (this.props.expandedKeys ?? []).map(String);
+            const missing = folders.filter(k => !expanded.includes(k));
+            if (missing.length > 0) this.props.onTreeNodeExpand?.([...expanded, ...missing]);
+
+            await profileVM.saveProfileTreeToDatabase(profileTreeItem);
+            this.props.onModListChange?.();
+            await this.props.onUpdateTreeView?.();
+            // Highlight it, unless mods are being picked with checkboxes: a plain select would
+            // end that and drop the picked mods
+            if (!this.props.isMultiSelect) this.props.onTreeNodeSelect?.([sourceKey]);
+            requestAnimationFrame(() => this.treeRef.current?.scrollTo?.({key: sourceKey, align: "auto"}));
+        } catch (error) {
+            console.error(`[TreeView] Error moving ${sourceKey} to position ${position}:`, error);
+        }
+    }
+
     @autoBind
     private async onDrop(info: any) {
+        this.autoScroll.stop();
         await IoC.get(TreeViewModel);
         const profileVM = await IoC.get(ProfileViewModel);
         const activeRoot = await profileVM.getActiveProfileTreeRoot();
@@ -342,6 +388,7 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
                 onCountLabelUpdate={this.props.onCountLabelUpdate}
                 folders={folders}
                 onMoveToFolder={this.onMoveToFolder}
+                onMoveToPosition={InstallOrder.position(nodeData.modId) !== undefined ? this.onMoveToPosition : undefined}
                 itemOrder={itemOrder}
                 onRowClick={this.props.onTreeRowClick}
             />
@@ -361,15 +408,19 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
         this.refreshDerived();
 
         return (
+            <div ref={this.wrapperRef}>
             <Tree
+                ref={this.treeRef}
                 className="ant-tree-content"
                 blockNode
                 draggable
                 focusable={false}
                 tabIndex={-1}
-                // Workaround for antd bug: https://github.com/ant-design/ant-design/issues/54610
-                // Disable virtual scrolling during drag to prevent auto-scroll from getting stuck
-                virtual={!this.state.isDragging}
+                // Stays virtual while dragging: turning it off (the old workaround for
+                // ant-design#54610) rendered every row at drag start and on every drop-position
+                // change, which made dragging stutter on long lists. DragAutoScroll scrolls the
+                // list during a drag.
+                virtual
                 height={this.props.height ?? window.innerHeight - 145}
                 checkable={this.props.isMultiSelect}
                 expandedKeys={this.props.expandedKeys}
@@ -381,14 +432,10 @@ export class TreeView extends React.Component<TreeViewProps, TreeViewState> {
                 onRightClick={this.onTreeRightClick}
                 onExpand={this.onTreeNodeExpand}
                 onDrop={this.onDrop}
-                onDragStart={() => {
-                    this.setState({ isDragging: true });
-                }}
-                onDragEnd={() => {
-                    this.setState({ isDragging: false });
-                }}
+                onDragStart={info => this.autoScroll.start(info.event.target)}
                 titleRender={this.onCustomTitleRender}
             />
+            </div>
         );
     }
 }

@@ -1,6 +1,6 @@
 import {t} from "i18next";
 import React, {useState, useSyncExternalStore} from "react";
-import {Dropdown, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
+import {Button, Dropdown, Flex, InputNumber, MenuProps, Popover, Select, Spin, Switch, Tag, theme, Tooltip} from "antd";
 import {ModDescriptionHover} from "@/pages/HomePage/ModDescriptionHover";
 import {BgColorsOutlined, CloseCircleFilled, CloudDownloadOutlined, DisconnectOutlined, FolderOpenOutlined, ThunderboltOutlined} from "@ant-design/icons";
 import {ModListAppearance, readableTextOn} from "@/services/ModListAppearance";
@@ -1167,12 +1167,134 @@ function ModTreeViewTitle({nodeData}) {
 }
 
 
+/**
+ * The install position number in front of a mod. Clicking it asks for another position and moves
+ * the mod there (see TreeView.onMoveToPosition).
+ */
+function PositionBadge({nodeKey, position, enabled, onMove}: {
+    nodeKey: string;
+    position: number;
+    enabled: boolean;
+    onMove?: (sourceKey: string, position: number) => void | Promise<void>;
+}) {
+    const {token} = useToken();
+    const total = useInstallOrder().length;
+    const [open, setOpen] = useState(false);
+    const [value, setValue] = useState<number | null>(position);
+    const [moving, setMoving] = useState(false);
+    const inputRef = React.useRef<any>(null);
+
+    React.useEffect(() => {
+        if (open) {
+            setValue(position);
+            // select the number so typing replaces it
+            setTimeout(() => inputRef.current?.select?.(), 30);
+        }
+    }, [open, position]);
+
+    const target = value == null ? null : Math.min(Math.max(Math.round(value), 1), Math.max(total, 1));
+    const canMove = !!onMove && target != null && target !== position && !moving;
+
+    const move = async () => {
+        if (!canMove || target == null) return;
+        setMoving(true);
+        try {
+            await onMove!(nodeKey, target);
+        } finally {
+            setMoving(false);
+            setOpen(false);
+        }
+    };
+
+    // clicks and presses on the badge belong to it, not to the row (select) or the tree (drag)
+    const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
+    const badge = (
+        <span onClick={(e) => {
+                  stop(e);
+                  if (onMove && !e.ctrlKey && !e.shiftKey && !e.metaKey) setOpen(true);
+              }}
+              onMouseDown={stop}
+              onDoubleClick={stop}
+              style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minWidth: "40px",
+                  height: "18px",
+                  borderRadius: "9px",
+                  backgroundColor: enabled ? token.colorPrimaryBg : token.colorBgTextHover,
+                  color: enabled ? token.colorPrimary : token.colorTextDisabled,
+                  fontSize: "11px",
+                  fontWeight: 600,
+                  marginRight: "6px",
+                  padding: "0 5px",
+                  lineHeight: 1,
+                  fontVariantNumeric: "tabular-nums",
+                  flexShrink: 0,
+                  cursor: onMove ? "pointer" : undefined,
+                  outline: open ? `1px solid ${token.colorPrimary}` : undefined,
+              }}>
+            {position}
+        </span>
+    );
+
+    if (!onMove) {
+        return (
+            <Tooltip title={t("list.installPositionHint", {position})} mouseEnterDelay={0.6}>
+                {badge}
+            </Tooltip>
+        );
+    }
+    return (
+        <Popover open={open}
+                 onOpenChange={(next) => {
+                     if (!moving) setOpen(next);
+                 }}
+                 trigger="click"
+                 placement="bottomLeft"
+                 destroyOnHidden
+                 title={t("list.moveToPositionTitle")}
+                 content={
+                     <div onClick={stop} onMouseDown={stop} onKeyDown={(e) => {
+                         e.stopPropagation();
+                         if (e.key === "Escape") setOpen(false);
+                     }}>
+                         <Flex gap={8} align="center">
+                             <InputNumber ref={inputRef}
+                                          autoFocus
+                                          size="small"
+                                          min={1}
+                                          max={Math.max(total, 1)}
+                                          precision={0}
+                                          value={value}
+                                          onChange={(v) => setValue(typeof v === "number" ? v : null)}
+                                          onPressEnter={() => void move()}
+                                          style={{width: 90}}/>
+                             <Button size="small" type="primary" loading={moving} disabled={!canMove} onClick={() => void move()}>
+                                 {t("list.moveToPositionOk")}
+                             </Button>
+                         </Flex>
+                         <div style={{fontSize: 12, opacity: 0.65, marginTop: 6, maxWidth: 260}}>
+                             {t("list.moveToPositionHint", {position, total})}
+                         </div>
+                     </div>
+                 }>
+            <Tooltip title={open ? undefined : t("list.installPositionClickHint", {position})} mouseEnterDelay={0.6}>
+                {badge}
+            </Tooltip>
+        </Popover>
+    );
+}
+
 export interface TreeViewItemProps {
     nodeData: any;
     onMenuClick: any;
     onCountLabelUpdate?: () => Promise<void>;
     folders?: FolderInfo[];
     onMoveToFolder?: (sourceKey: string, targetFolderKey: string) => void;
+    /** Move a mod to another install position (1 = top); only when its position is known */
+    onMoveToPosition?: (sourceKey: string, position: number) => void | Promise<void>;
     itemOrder?: number;
     /** Click on a mod row (Ctrl/Shift-clicks select mods) */
     onRowClick?: (nodeKey: string, e: React.MouseEvent) => void;
@@ -1192,6 +1314,7 @@ function TreeViewItemInner({
     onCountLabelUpdate,
     folders,
     onMoveToFolder,
+    onMoveToPosition,
     itemOrder,
     onRowClick,
 }: TreeViewItemProps) {
@@ -1283,27 +1406,10 @@ function TreeViewItemInner({
                       }}>
                 <ModTreeViewProgressBackground nodeData={nodeData} onRowClick={onRowClick}>
   
-                <Tooltip title={t("list.installPositionHint", {position: itemOrder ?? 1})} mouseEnterDelay={0.6}>
-                <span style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        minWidth: "40px",
-                        height: "18px",
-                        borderRadius: "9px",
-                        backgroundColor: enabled ? token.colorPrimaryBg : token.colorBgTextHover,
-                        color: enabled ? token.colorPrimary : token.colorTextDisabled,
-                        fontSize: "11px",
-                        fontWeight: 600,
-                        marginRight: "6px",
-                        padding: "0 5px",
-                        lineHeight: 1,
-                        fontVariantNumeric: "tabular-nums",
-                        flexShrink: 0,
-                    }}>
-                        {itemOrder ?? 1}
-                    </span>
-                </Tooltip>
+                <PositionBadge nodeKey={String(nodeData.key)}
+                               position={itemOrder ?? 1}
+                               enabled={enabled}
+                               onMove={onMoveToPosition}/>
 
                     <ModTreeViewSwitch nodeData={nodeData} onCountLabelUpdate={onCountLabelUpdate}/>
 

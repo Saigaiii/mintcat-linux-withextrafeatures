@@ -57,7 +57,7 @@ import {
     clearCachedWarningState,
     clearCachedDownloadProgress,
 } from "./TreeViewItem.tsx";
-import { computeInstallManifestHash } from "@/tasks/ModInstallTask";
+import { computeInstallManifestHash } from "@/tasks/InstallManifestHash";
 import { flattenTreeModIds, sortByDisplayOrder } from "@/utils/ModDisplayOrder";
 import { InstallOrder, ListDisplayOptions } from "@/services/ListDisplay";
 import { RepositoryUpdates } from "@/services/RepositoryUpdates";
@@ -173,9 +173,12 @@ export class HomePage extends BasePage<any, ModListPageState> {
             );
 
             const modsDAO = await StorageAPI.getMods();
+            // One batch query instead of four per mod: this runs after every change to the list
+            const loaded = await modsDAO.getBatchCompleteModDataOptimized(enabledProfileMods.map(pm => pm.modId));
+            const byId = new Map(loaded.map(m => [m.modId, m]));
             const enabledMods: CompleteModData[] = [];
             for (const pm of enabledProfileMods) {
-                const modData = await modsDAO.getCompleteModData(pm.modId);
+                const modData = byId.get(pm.modId);
                 if (modData) enabledMods.push(modData);
             }
 
